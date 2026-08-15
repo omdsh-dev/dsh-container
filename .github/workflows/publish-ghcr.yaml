@@ -1,0 +1,100 @@
+name: 发布 GHCR 镜像
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      dsh_version:
+        description: 要安装的 DSH npm 版本或 dist-tag
+        required: false
+        default: latest
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-ghcr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: 构建并发布
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+
+      - name: 解析 DSH 版本和镜像名
+        id: release
+        shell: bash
+        env:
+          INPUT_DSH_VERSION: ${{ inputs.dsh_version }}
+        run: |
+          set -euo pipefail
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            requested_version="${GITHUB_REF_NAME#v}"
+          elif [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            requested_version="${INPUT_DSH_VERSION:-latest}"
+          else
+            requested_version="latest"
+          fi
+
+          resolved_version="$(npm view "@deepseek-ai/dsh@${requested_version}" version --json | jq -er 'if type == "string" then . else error("必须解析为单个版本") end')"
+          image_name="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/dsh-server"
+
+          echo "dsh_version=${resolved_version}" >> "${GITHUB_OUTPUT}"
+          echo "image_name=${image_name}" >> "${GITHUB_OUTPUT}"
+          echo "### 发布 ${image_name}:${resolved_version}" >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: 配置 QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: 配置 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 生成镜像元数据
+        id: metadata
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.release.outputs.image_name }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=${{ steps.release.outputs.dsh_version }}
+            type=sha,prefix=sha-,format=short
+          labels: |
+            org.opencontainers.image.title=dsh-server
+            org.opencontainers.image.description=Run DeepSeek Harness with Docker
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.version=${{ steps.release.outputs.dsh_version }}
+
+      - name: 构建并推送镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: |
+            DSH_VERSION=${{ steps.release.outputs.dsh_version }}
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true

@@ -3,6 +3,9 @@ FROM node:24-bookworm-slim
 ARG DSH_VERSION=latest
 
 ENV DSH_HOME=/home/node/.dsh \
+    DSH_ALLOW_REMOTE_SETTINGS=1 \
+    DSH_PERMISSION_MODE=danger-full-access \
+    DSH_TELEMETRY_DISABLED=1 \
     NODE_USE_ENV_PROXY=1
 
 RUN apt-get update \
@@ -47,5 +50,8 @@ USER node
 WORKDIR /home/node
 
 EXPOSE 3080
+
+HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=12 \
+    CMD node -e "fetch('http://127.0.0.1:3081/').then(response => { if (!response.ok) process.exit(1) }).catch(() => process.exit(1))"
 
 ENTRYPOINT ["/usr/local/bin/dsh-server-entrypoint"]
