@@ -1,8 +1,8 @@
-# dsh-server
+# dsh-container
 
-[![发布 GHCR 镜像](https://github.com/Juexe/dsh-server/actions/workflows/publish-ghcr.yaml/badge.svg)](https://github.com/Juexe/dsh-server/actions/workflows/publish-ghcr.yaml)
+[![发布 GHCR 镜像](https://github.com/Juexe/dsh-container/actions/workflows/publish-ghcr.yaml/badge.svg)](https://github.com/Juexe/dsh-container/actions/workflows/publish-ghcr.yaml)
 
-`dsh-server` 使用 Docker 运行 npm 发布版的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)。公开镜像支持 `linux/amd64` 和 `linux/arm64`，运行时不需要下载 npm 依赖。
+`dsh-container` 使用 Docker 运行 npm 发布版的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)。公开镜像支持 `linux/amd64` 和 `linux/arm64`，运行时不需要下载 npm 依赖。
 
 > [!WARNING]
 > **请勿将本服务部署到公网环境。** 本项目不提供身份认证；能够访问服务的客户端可以调用全部 API、修改设置与凭据，并驱动 Agent 在容器内执行命令。因公网暴露、错误配置或缺少访问控制造成的一切后果由部署者自行承担。
@@ -12,10 +12,10 @@
 安装 Docker 后直接运行：
 
 ```sh
-docker run -d -p 3080:3080 -e "DSH_SERVER_TRUSTED_HOSTS=localhost,127.0.0.1" ghcr.io/juexe/dsh-server:latest
+docker run -d -p 3080:3080 -e "DSH_CONTAINER_TRUSTED_HOSTS=localhost,127.0.0.1" ghcr.io/juexe/dsh-container:latest
 ```
 
-容器通过健康检查后访问 <http://localhost:3080>。通过主机名或局域网 IP 访问时，将 `DSH_SERVER_TRUSTED_HOSTS` 改为浏览器实际使用的主机名、IP 或 `host:port`，多个值使用逗号分隔。
+容器通过健康检查后访问 <http://localhost:3080>。通过主机名或局域网 IP 访问时，将 `DSH_CONTAINER_TRUSTED_HOSTS` 改为浏览器实际使用的主机名、IP 或 `host:port`，多个值使用逗号分隔。
 
 这条最简命令适合快速体验，不包含持久化、自动重启和额外的容器安全限制。删除容器会同时丢失其中的设置和工作区数据。
 
@@ -25,7 +25,7 @@ docker run -d -p 3080:3080 -e "DSH_SERVER_TRUSTED_HOSTS=localhost,127.0.0.1" ghc
 
 ```sh
 docker run -d \
-  --name dsh-server \
+  --name dsh-container \
   --restart unless-stopped \
   --init \
   --read-only \
@@ -33,11 +33,11 @@ docker run -d \
   --security-opt no-new-privileges:true \
   --stop-timeout 20 \
   -p 3080:3080 \
-  -e "DSH_SERVER_TRUSTED_HOSTS=localhost,127.0.0.1" \
+  -e "DSH_CONTAINER_TRUSTED_HOSTS=localhost,127.0.0.1" \
   --tmpfs /tmp:rw,nosuid,nodev,size=512m,mode=1777 \
   -v dsh-workspace:/home/node \
   -v dsh-config:/home/node/.dsh \
-  ghcr.io/juexe/dsh-server:latest
+  ghcr.io/juexe/dsh-container:latest
 ```
 
 如需直接访问宿主机文件，可将两个命名卷参数替换为绑定挂载：
@@ -64,7 +64,7 @@ docker compose up -d --build
 docker compose ps
 ```
 
-`.env` 中的 `DSH_SERVER_TRUSTED_HOSTS` 必须按实际访问地址修改。仓库不包含针对特定设备或环境的自动部署脚本。
+`.env` 中的 `DSH_CONTAINER_TRUSTED_HOSTS` 必须按实际访问地址修改。仓库不包含针对特定设备或环境的自动部署脚本。
 
 ## 安全说明
 
@@ -80,22 +80,23 @@ trusted-host 是 Host 与同源信任边界，不是身份认证。**请勿在�
 
 ## 配置
 
-### dsh-server 配置
+### dsh-container 配置
 
 以下变量由容器封装定义，不属于 DSH 上游：
 
 | 变量 | 默认值 | 说明 |
 |---|---|---|
-| `DSH_SERVER_TRUSTED_HOSTS` | 必填 | 传给 DSH `--trusted-host` 的主机名、IP 或 `host:port`，多个值用逗号分隔 |
-| `DSH_SERVER_BIND_ADDRESS` | `0.0.0.0` | Compose 发布端口的监听地址 |
-| `DSH_SERVER_PORT` | `3080` | Compose 发布到宿主机的端口 |
-| `DSH_SERVER_RELAY_PORT` | `3080` | 容器内对外 relay 端口 |
-| `DSH_SERVER_INTERNAL_PORT` | `3081` | 容器内 DSH Web 服务端口 |
-| `DSH_SERVER_DSH_VERSION` | `latest` | 源码构建时安装的 DSH npm 版本或 dist-tag |
+| `DSH_CONTAINER_IMAGE` | `dsh-container` | Compose 构建或运行使用的镜像仓库名；使用 GHCR 时设为 `ghcr.io/juexe/dsh-container` |
+| `DSH_CONTAINER_TRUSTED_HOSTS` | 必填 | 传给 DSH `--trusted-host` 的主机名、IP 或 `host:port`，多个值用逗号分隔 |
+| `DSH_CONTAINER_BIND_ADDRESS` | `0.0.0.0` | Compose 发布端口的监听地址 |
+| `DSH_CONTAINER_PORT` | `3080` | Compose 发布到宿主机的端口 |
+| `DSH_CONTAINER_RELAY_PORT` | `3080` | 容器内对外 relay 端口 |
+| `DSH_CONTAINER_INTERNAL_PORT` | `3081` | 容器内 DSH Web 服务端口 |
+| `DSH_CONTAINER_DSH_VERSION` | `latest` | 源码构建时安装的 DSH npm 版本或 dist-tag |
 
 ### DSH 原生配置
 
-这些变量由 DSH 上游读取，dsh-server 只提供适合容器的默认值：
+这些变量由 DSH 上游读取，dsh-container 只提供适合容器的默认值：
 
 | 变量 | 镜像默认值 | 说明 |
 |---|---|---|
@@ -116,7 +117,7 @@ Node.js 24 会通过 `NODE_USE_ENV_PROXY` 自动使用 `HTTP_PROXY`、`HTTPS_PRO
 GHCR 镜像可直接使用 DSH 版本标签：
 
 ```sh
-docker pull ghcr.io/juexe/dsh-server:0.1.0-rc.6
+docker pull ghcr.io/juexe/dsh-container:0.1.0-rc.6
 ```
 
 ## 数据目录
@@ -133,8 +134,8 @@ docker pull ghcr.io/juexe/dsh-server:0.1.0-rc.6
 GHCR 的 `latest` 跟随 main 分支，每次发布还会生成 DSH 精确版本标签和 `sha-<commit>` 标签。更新长期运行的容器：
 
 ```sh
-docker pull ghcr.io/juexe/dsh-server:latest
-docker rm -f dsh-server
+docker pull ghcr.io/juexe/dsh-container:latest
+docker rm -f dsh-container
 # 再次执行“长期运行”中的 docker run 命令
 ```
 
@@ -148,9 +149,9 @@ docker compose up -d dsh
 常用运维命令：
 
 ```sh
-docker logs -f --tail 200 dsh-server
-docker restart dsh-server
-docker stop dsh-server
+docker logs -f --tail 200 dsh-container
+docker restart dsh-container
+docker stop dsh-container
 ```
 
 ## 许可证

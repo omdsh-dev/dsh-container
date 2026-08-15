@@ -2,16 +2,16 @@
 
 set -Eeuo pipefail
 
-readonly relay_port="${DSH_SERVER_RELAY_PORT:-3080}"
-readonly app_port="${DSH_SERVER_INTERNAL_PORT:-3081}"
-readonly trusted_hosts_csv="${DSH_SERVER_TRUSTED_HOSTS:-}"
+readonly relay_port="${DSH_CONTAINER_RELAY_PORT:-3080}"
+readonly app_port="${DSH_CONTAINER_INTERNAL_PORT:-3081}"
+readonly trusted_hosts_csv="${DSH_CONTAINER_TRUSTED_HOSTS:-}"
 
 require_port() {
   local name="$1"
   local value="$2"
 
   if [[ ! "$value" =~ ^[0-9]+$ ]] || (( value < 1 || value > 65535 )); then
-    printf 'dsh-server: %s must be an integer from 1 to 65535, got %q\n' "$name" "$value" >&2
+    printf 'dsh-container: %s must be an integer from 1 to 65535, got %q\n' "$name" "$value" >&2
     exit 64
   fi
 }
@@ -23,11 +23,11 @@ trim() {
   printf '%s' "$value"
 }
 
-require_port DSH_SERVER_RELAY_PORT "$relay_port"
-require_port DSH_SERVER_INTERNAL_PORT "$app_port"
+require_port DSH_CONTAINER_RELAY_PORT "$relay_port"
+require_port DSH_CONTAINER_INTERNAL_PORT "$app_port"
 
 if [[ "$relay_port" == "$app_port" ]]; then
-  printf 'dsh-server: DSH_SERVER_RELAY_PORT and DSH_SERVER_INTERNAL_PORT must differ\n' >&2
+  printf 'dsh-container: DSH_CONTAINER_RELAY_PORT and DSH_CONTAINER_INTERNAL_PORT must differ\n' >&2
   exit 64
 fi
 
@@ -41,13 +41,13 @@ for raw_host in "${raw_trusted_hosts[@]}"; do
 done
 
 if (( ${#trusted_hosts[@]} == 0 )); then
-  printf 'dsh-server: DSH_SERVER_TRUSTED_HOSTS must contain at least one LAN authority\n' >&2
+  printf 'dsh-container: DSH_CONTAINER_TRUSTED_HOSTS must contain at least one LAN authority\n' >&2
   exit 64
 fi
 
 dsh_entrypoint="$(readlink -f "$(command -v dsh)")"
 if [[ ! -f "$dsh_entrypoint" ]]; then
-  printf 'dsh-server: unable to resolve the dsh executable\n' >&2
+  printf 'dsh-container: unable to resolve the dsh executable\n' >&2
   exit 69
 fi
 

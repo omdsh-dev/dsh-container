@@ -38,7 +38,7 @@ await chmod(polyfillTarget, 0o644);
 const upstreamGuard =
   'if (method !== void 0 && PRIVILEGED_METHODS.has(method) && !isTrustedApiRequest(request, [])) return new Response("forbidden", { status: 403 });';
 const removedGuardMarker =
-  '/* dsh-server: trusted-host validation is the sole API access check. */';
+  '/* dsh-container: trusted-host validation is the sole API access check. */';
 let serverSource = await readFile(connectionServer, "utf8");
 
 if (!serverSource.includes(removedGuardMarker)) {
@@ -52,7 +52,7 @@ if (!serverSource.includes(removedGuardMarker)) {
 const nativePathCapability =
   'return isWsl(internals) || present(env.DISPLAY) || present(env.WAYLAND_DISPLAY);';
 const containerPathCapability =
-  'return false; /* dsh-server: containers have no native desktop opener. */';
+  'return false; /* dsh-container: containers have no native desktop opener. */';
 const settingsDocumentCapability =
   'hasDocument: settings.documentPath !== void 0,';
 const containerSettingsDocumentCapability =
@@ -80,7 +80,7 @@ await writeFile(hostApiProxy, hostSource);
 
 const loopbackSettingsMode = 'connection.isLoopback ? "host" : "memory"';
 const trustedHostSettingsMode =
-  '"host" /* dsh-server: trusted-host clients persist settings on the Host. */';
+  '"host" /* dsh-container: trusted-host clients persist settings on the Host. */';
 
 for (const target of [settingsClient, settingsModelsClient]) {
   let clientSource = await readFile(target, "utf8");

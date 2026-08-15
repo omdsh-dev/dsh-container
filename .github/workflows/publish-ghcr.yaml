@@ -48,7 +48,7 @@ jobs:
           fi
 
           resolved_version="$(npm view "@deepseek-ai/dsh@${requested_version}" version --json | jq -er 'if type == "string" then . else error("必须解析为单个版本") end')"
-          image_name="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/dsh-server"
+          image_name="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/dsh-container"
 
           echo "dsh_version=${resolved_version}" >> "${GITHUB_OUTPUT}"
           echo "image_name=${image_name}" >> "${GITHUB_OUTPUT}"
@@ -78,7 +78,7 @@ jobs:
             type=raw,value=${{ steps.release.outputs.dsh_version }}
             type=sha,prefix=sha-,format=short
           labels: |
-            org.opencontainers.image.title=dsh-server
+            org.opencontainers.image.title=dsh-container
             org.opencontainers.image.description=Run DeepSeek Harness with Docker
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.licenses=MIT
@@ -91,7 +91,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           build-args: |
-            DSH_SERVER_DSH_VERSION=${{ steps.release.outputs.dsh_version }}
+            DSH_CONTAINER_DSH_VERSION=${{ steps.release.outputs.dsh_version }}
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
           cache-from: type=gha
