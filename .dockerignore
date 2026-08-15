@@ -1,0 +1,9 @@
+.git
+.gitignore
+personal
+.dsh
+.env
+.playwright-cli
+data
+workspace
+*.log

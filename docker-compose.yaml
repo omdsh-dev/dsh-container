@@ -1,0 +1,51 @@
+name: dsh-server
+
+services:
+  dsh:
+    image: dsh-server:${DSH_VERSION:-latest}
+    build:
+      context: .
+      args:
+        DSH_VERSION: ${DSH_VERSION:-latest}
+    init: true
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "${DSH_BIND_ADDRESS:-0.0.0.0}:${DSH_PORT:-3080}:3080"
+    env_file:
+      - .env
+    environment:
+      DSH_HOME: /home/node/.dsh
+      DSH_ALLOW_REMOTE_SETTINGS: ${DSH_ALLOW_REMOTE_SETTINGS:-1}
+      DSH_PERMISSION_MODE: danger-full-access
+      DSH_TELEMETRY_DISABLED: "1"
+      DSH_TRUSTED_HOSTS: ${DSH_TRUSTED_HOSTS:?请在 .env 中设置 DSH_TRUSTED_HOSTS}
+      NODE_USE_ENV_PROXY: "1"
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - type: bind
+        source: ./workspace
+        target: /home/node
+      - type: bind
+        source: ./.dsh
+        target: /home/node/.dsh
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=512m,mode=1777
+    stop_grace_period: 20s
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:3081/').then(response => {
+            if (!response.ok) process.exit(1)
+          }).catch(() => process.exit(1))
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s

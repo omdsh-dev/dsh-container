@@ -1,0 +1,7 @@
+/personal/
+.env
+.dsh/
+workspace/
+data/
+.playwright-cli/
+*.log
