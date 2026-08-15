@@ -1,9 +1,6 @@
-.git
-.gitignore
-personal
-.dsh
-.env
-.playwright-cli
-data
-workspace
-*.log
+**
+!Dockerfile
+!docker/
+!docker/entrypoint.sh
+!docker/patch-dsh.mjs
+!docker/random-uuid-polyfill.js

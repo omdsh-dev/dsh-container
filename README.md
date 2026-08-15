@@ -4,15 +4,18 @@
 
 `dsh-server` 使用 Docker 运行 npm 发布版的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)。公开镜像支持 `linux/amd64` 和 `linux/arm64`，运行时不需要下载 npm 依赖。
 
+> [!WARNING]
+> **请勿将本服务部署到公网环境。** 本项目不提供身份认证；能够访问服务的客户端可以调用全部 API、修改设置与凭据，并驱动 Agent 在容器内执行命令。因公网暴露、错误配置或缺少访问控制造成的一切后果由部署者自行承担。
+
 ## 快速开始
 
 安装 Docker 后直接运行：
 
 ```sh
-docker run -d -p 3080:3080 -e "DSH_TRUSTED_HOSTS=localhost,127.0.0.1" ghcr.io/juexe/dsh-server:latest
+docker run -d -p 3080:3080 -e "DSH_SERVER_TRUSTED_HOSTS=localhost,127.0.0.1" ghcr.io/juexe/dsh-server:latest
 ```
 
-容器通过健康检查后访问 <http://localhost:3080>。通过主机名或局域网 IP 访问时，将 `DSH_TRUSTED_HOSTS` 改为浏览器实际使用的主机名、IP 或 `host:port`，多个值使用逗号分隔。
+容器通过健康检查后访问 <http://localhost:3080>。通过主机名或局域网 IP 访问时，将 `DSH_SERVER_TRUSTED_HOSTS` 改为浏览器实际使用的主机名、IP 或 `host:port`，多个值使用逗号分隔。
 
 这条最简命令适合快速体验，不包含持久化、自动重启和额外的容器安全限制。删除容器会同时丢失其中的设置和工作区数据。
 
@@ -30,7 +33,7 @@ docker run -d \
   --security-opt no-new-privileges:true \
   --stop-timeout 20 \
   -p 3080:3080 \
-  -e "DSH_TRUSTED_HOSTS=localhost,127.0.0.1" \
+  -e "DSH_SERVER_TRUSTED_HOSTS=localhost,127.0.0.1" \
   --tmpfs /tmp:rw,nosuid,nodev,size=512m,mode=1777 \
   -v dsh-workspace:/home/node \
   -v dsh-config:/home/node/.dsh \
@@ -61,13 +64,13 @@ docker compose up -d --build
 docker compose ps
 ```
 
-`.env` 中的 `DSH_TRUSTED_HOSTS` 必须按实际访问地址修改。仓库不包含针对特定设备或环境的自动部署脚本。
+`.env` 中的 `DSH_SERVER_TRUSTED_HOSTS` 必须按实际访问地址修改。仓库不包含针对特定设备或环境的自动部署脚本。
 
 ## 安全说明
 
-DSH Web UI 可以驱动 Agent 在工作区中执行命令。本项目默认不提供认证，并允许 trusted host 管理设置、凭据和模型探测，因此只适合在完全可信的网络中使用。
+DSH Web UI 可以驱动 Agent 在工作区中执行命令。本项目默认不提供认证；通过 DSH trusted-host 和同源校验的客户端可以调用全部 API，包括设置、凭据、Agent Preset、模型探测和宿主操作，因此只适合在完全可信的网络中使用。
 
-不要将服务端口直接暴露到公网。仅需本机访问时，可将端口参数改为 `-p 127.0.0.1:3080:3080`；需要远程访问时，应在反向代理或访问网关中配置 HTTPS、认证和访问控制。将 `DSH_ALLOW_REMOTE_SETTINGS` 设为 `0` 可以恢复上游仅允许 loopback 调用敏感设置 API 的限制。
+trusted-host 是 Host 与同源信任边界，不是身份认证。**请勿在公网环境部署本服务；因公网暴露或访问控制配置不当造成的一切后果由部署者自行承担。** 仅需本机访问时，可将端口参数改为 `-p 127.0.0.1:3080:3080`；需要跨设备访问时，应仅在可信内网中使用，并在反向代理或访问网关中配置 HTTPS、认证和访问控制。
 
 镜像始终使用非 root 用户运行。长期运行命令和 Compose 还会使用只读根文件系统、删除 Linux capabilities、启用 `no-new-privileges`，且不会挂载 Docker socket。
 
@@ -77,19 +80,40 @@ DSH Web UI 可以驱动 Agent 在工作区中执行命令。本项目默认不�
 
 ## 配置
 
+### dsh-server 配置
+
+以下变量由容器封装定义，不属于 DSH 上游：
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `DSH_SERVER_TRUSTED_HOSTS` | 必填 | 传给 DSH `--trusted-host` 的主机名、IP 或 `host:port`，多个值用逗号分隔 |
+| `DSH_SERVER_BIND_ADDRESS` | `0.0.0.0` | Compose 发布端口的监听地址 |
+| `DSH_SERVER_PORT` | `3080` | Compose 发布到宿主机的端口 |
+| `DSH_SERVER_RELAY_PORT` | `3080` | 容器内对外 relay 端口 |
+| `DSH_SERVER_INTERNAL_PORT` | `3081` | 容器内 DSH Web 服务端口 |
+| `DSH_SERVER_DSH_VERSION` | `latest` | 源码构建时安装的 DSH npm 版本或 dist-tag |
+
+### DSH 原生配置
+
+这些变量由 DSH 上游读取，dsh-server 只提供适合容器的默认值：
+
 | 变量 | 镜像默认值 | 说明 |
 |---|---|---|
-| `DSH_TRUSTED_HOSTS` | 必填 | 逗号分隔的主机名、IP 或 `host:port` |
-| `DSH_ALLOW_REMOTE_SETTINGS` | `1` | 是否允许 trusted host 管理设置、凭据和模型探测 |
+| `DSH_HOME` | `/home/node/.dsh` | DSH 配置和运行状态目录 |
 | `DSH_PERMISSION_MODE` | `danger-full-access` | 容器内 Agent 权限模式 |
 | `DSH_TELEMETRY_DISABLED` | `1` | 禁用遥测 |
+
+### 通用及提供方配置
+
+| 变量 | 镜像默认值 | 说明 |
+|---|---|---|
 | `TZ` | 系统默认 | 容器时区 |
 | `DEEPSEEK_API_KEY` | 未设置 | 可选 DeepSeek API 密钥，也可在 Web UI 中配置 |
 | `DEEPSEEK_BASE_URL` | 官方 API | 可选兼容端点 |
 
 Node.js 24 会通过 `NODE_USE_ENV_PROXY` 自动使用 `HTTP_PROXY`、`HTTPS_PROXY` 和 `NO_PROXY`。
 
-源码构建还支持 `DSH_VERSION`，用于指定构建时安装的 npm 包版本。GHCR 镜像可直接使用相同版本标签：
+GHCR 镜像可直接使用 DSH 版本标签：
 
 ```sh
 docker pull ghcr.io/juexe/dsh-server:0.1.0-rc.6

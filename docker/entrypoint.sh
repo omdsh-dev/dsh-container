@@ -2,9 +2,9 @@
 
 set -Eeuo pipefail
 
-readonly relay_port="${DSH_RELAY_PORT:-3080}"
-readonly app_port="${DSH_INTERNAL_PORT:-3081}"
-readonly trusted_hosts_csv="${DSH_TRUSTED_HOSTS:-}"
+readonly relay_port="${DSH_SERVER_RELAY_PORT:-3080}"
+readonly app_port="${DSH_SERVER_INTERNAL_PORT:-3081}"
+readonly trusted_hosts_csv="${DSH_SERVER_TRUSTED_HOSTS:-}"
 
 require_port() {
   local name="$1"
@@ -23,11 +23,11 @@ trim() {
   printf '%s' "$value"
 }
 
-require_port DSH_RELAY_PORT "$relay_port"
-require_port DSH_INTERNAL_PORT "$app_port"
+require_port DSH_SERVER_RELAY_PORT "$relay_port"
+require_port DSH_SERVER_INTERNAL_PORT "$app_port"
 
 if [[ "$relay_port" == "$app_port" ]]; then
-  printf 'dsh-server: DSH_RELAY_PORT and DSH_INTERNAL_PORT must differ\n' >&2
+  printf 'dsh-server: DSH_SERVER_RELAY_PORT and DSH_SERVER_INTERNAL_PORT must differ\n' >&2
   exit 64
 fi
 
@@ -41,7 +41,7 @@ for raw_host in "${raw_trusted_hosts[@]}"; do
 done
 
 if (( ${#trusted_hosts[@]} == 0 )); then
-  printf 'dsh-server: DSH_TRUSTED_HOSTS must contain at least one LAN authority\n' >&2
+  printf 'dsh-server: DSH_SERVER_TRUSTED_HOSTS must contain at least one LAN authority\n' >&2
   exit 64
 fi
 

@@ -2,11 +2,11 @@ name: dsh-server
 
 services:
   dsh:
-    image: dsh-server:${DSH_VERSION:-latest}
+    image: dsh-server:${DSH_SERVER_DSH_VERSION:-latest}
     build:
       context: .
       args:
-        DSH_VERSION: ${DSH_VERSION:-latest}
+        DSH_SERVER_DSH_VERSION: ${DSH_SERVER_DSH_VERSION:-latest}
     init: true
     restart: unless-stopped
     read_only: true
@@ -15,15 +15,14 @@ services:
     security_opt:
       - no-new-privileges:true
     ports:
-      - "${DSH_BIND_ADDRESS:-0.0.0.0}:${DSH_PORT:-3080}:3080"
+      - "${DSH_SERVER_BIND_ADDRESS:-0.0.0.0}:${DSH_SERVER_PORT:-3080}:${DSH_SERVER_RELAY_PORT:-3080}"
     env_file:
       - .env
     environment:
       DSH_HOME: /home/node/.dsh
-      DSH_ALLOW_REMOTE_SETTINGS: ${DSH_ALLOW_REMOTE_SETTINGS:-1}
       DSH_PERMISSION_MODE: danger-full-access
       DSH_TELEMETRY_DISABLED: "1"
-      DSH_TRUSTED_HOSTS: ${DSH_TRUSTED_HOSTS:?请在 .env 中设置 DSH_TRUSTED_HOSTS}
+      DSH_SERVER_TRUSTED_HOSTS: ${DSH_SERVER_TRUSTED_HOSTS:?请在 .env 中设置 DSH_SERVER_TRUSTED_HOSTS}
       NODE_USE_ENV_PROXY: "1"
       TZ: ${TZ:-Asia/Shanghai}
     volumes:
@@ -42,7 +41,8 @@ services:
         - node
         - -e
         - >-
-          fetch('http://127.0.0.1:3081/').then(response => {
+          const port = process.env.DSH_SERVER_INTERNAL_PORT ?? '3081';
+          fetch('http://127.0.0.1:' + port + '/').then(response => {
             if (!response.ok) process.exit(1)
           }).catch(() => process.exit(1))
       interval: 10s
