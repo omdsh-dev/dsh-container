@@ -8,13 +8,15 @@ window.__ModuleLoader__.load({
     const React = require("react");
     const {
       Button,
+      IconLoadingOutline16,
       IconRefreshOutline16,
+      Modal,
       RiskConfirmation,
     } = require("@deepseek-ai/dsh-client-ui-primitives");
     const { createElement: h, useCallback, useEffect, useRef, useState } = React;
 
     const RPC_CHANNEL = "/dsh-container";
-    const RESTART_TIMEOUT_MS = 90_000;
+    const RESTART_MANUAL_CHECK_MS = 90_000;
     const POLL_INTERVAL_MS = 1_000;
     const REQUEST_TIMEOUT_MS = 3_000;
     const LOCALE_NAMESPACE = "settings.dsh-container";
@@ -24,18 +26,15 @@ window.__ModuleLoader__.load({
       title: "DSH 容器",
       intro: "当前容器实例的只读有效配置。",
       "group.runtime": "运行环境",
-      "group.network": "网络",
-      "group.security": "安全",
+      "group.networkSecurity": "网络和安全",
       "group.maintenance": "维护",
       "field.dshVersion": "DSH 版本",
       "field.timeZone": "时区",
       "field.user": "运行用户",
-      "field.relayPort": "Relay 端口",
-      "field.internalPort": "DSH 内部端口",
+      "field.ports": "端口",
       "field.trustedHosts": "Trusted hosts",
       "field.permissionMode": "权限模式",
       "field.telemetry": "遥测",
-      "field.restart": "WebUI 重启",
       "status.enabled": "已启用",
       "status.disabled": "已禁用",
       "status.none": "无",
@@ -46,12 +45,9 @@ window.__ModuleLoader__.load({
       "restart.requesting": "正在提交重启请求...",
       "restart.waiting": "容器正在重启，等待新实例恢复...",
       "restart.failed": "重启请求失败",
-      "restart.timeout": "90 秒内未检测到新实例。请检查容器状态后重试。",
-      "restart.retry": "重新检测",
-      "restart.disabled": "部署未启用 WebUI 重启。",
-      "restart.policy": "重启依赖部署者配置的 Docker restart policy，本页面无法自动检测该策略。",
+      "restart.manualCheck": "容器可能无法启动，请检查 Docker 容器状态并手动启动。",
       "confirm.title": "重启 DSH 容器",
-      "confirm.description": "这会中断正在运行的 Agent、终端和网络连接。容器退出后必须由 Docker restart policy 拉起。",
+      "confirm.description": "这会中断正在运行的 Agent、终端和网络连接。容器退出后，Docker restart policy 必须为 on-failure[:max-retries]、always 或 unless-stopped 才能自动拉起；no 或未配置会使容器保持停止。",
       "confirm.acknowledge": "我确认当前任务和连接会被中断",
       "confirm.cancel": "取消",
       "confirm.restart": "重启容器",
@@ -61,18 +57,15 @@ window.__ModuleLoader__.load({
       title: "DSH Container",
       intro: "Read-only effective configuration for the current container instance.",
       "group.runtime": "Runtime",
-      "group.network": "Network",
-      "group.security": "Security",
+      "group.networkSecurity": "Network and security",
       "group.maintenance": "Maintenance",
       "field.dshVersion": "DSH version",
       "field.timeZone": "Time zone",
       "field.user": "Runtime user",
-      "field.relayPort": "Relay port",
-      "field.internalPort": "DSH internal port",
+      "field.ports": "Ports",
       "field.trustedHosts": "Trusted hosts",
       "field.permissionMode": "Permission mode",
       "field.telemetry": "Telemetry",
-      "field.restart": "WebUI restart",
       "status.enabled": "Enabled",
       "status.disabled": "Disabled",
       "status.none": "None",
@@ -83,12 +76,9 @@ window.__ModuleLoader__.load({
       "restart.requesting": "Submitting the restart request...",
       "restart.waiting": "The container is restarting. Waiting for the new instance...",
       "restart.failed": "The restart request failed",
-      "restart.timeout": "A new instance was not detected within 90 seconds. Check the container and try again.",
-      "restart.retry": "Check again",
-      "restart.disabled": "WebUI restart is not enabled by this deployment.",
-      "restart.policy": "Restart depends on a Docker restart policy configured by the deployer. This page cannot detect that policy.",
+      "restart.manualCheck": "The container may not be starting. Check its Docker status and start it manually.",
       "confirm.title": "Restart DSH container",
-      "confirm.description": "This interrupts running Agents, terminals, and network connections. A Docker restart policy must start the container again after it exits.",
+      "confirm.description": "This interrupts running Agents, terminals, and network connections. After the container exits, its Docker restart policy must be on-failure[:max-retries], always, or unless-stopped to start it automatically; no or an unset policy leaves the container stopped.",
       "confirm.acknowledge": "I understand that current work and connections will be interrupted",
       "confirm.cancel": "Cancel",
       "confirm.restart": "Restart container",
@@ -107,11 +97,16 @@ window.__ModuleLoader__.load({
 .dcp-row dd{min-width:0;margin:0;overflow-wrap:anywhere}
 .dcp-hosts{display:flex;flex-wrap:wrap;gap:6px}
 .dcp-host{max-width:100%;padding:1px 6px;border:1px solid var(--dsw-alias-border-l2);border-radius:4px;background:var(--dsw-alias-bg-layer-1);font-family:var(--dsw-font-mono);font-size:12px;line-height:20px;overflow-wrap:anywhere}
-.dcp-status{margin:10px 0;color:var(--dsw-alias-label-secondary)}
+.dcp-status{margin:0 0 12px;color:var(--dsw-alias-label-secondary)}
 .dcp-status[role=alert]{color:var(--dsw-alias-label-error)}
-.dcp-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.dcp-actions{display:flex;flex-wrap:wrap;gap:8px}
 .dcp-section .dcp-action{max-width:100%;height:auto;min-height:36px;white-space:normal;text-align:center}
-.dcp-note{margin:12px 0 0;color:var(--dsw-alias-label-secondary);font-size:12px;line-height:18px}
+.dcp-restart-dialog{width:min(420px,100%);padding:0}
+.dcp-restart-status{display:flex;min-width:0;flex-direction:column;align-items:center;gap:14px;padding:28px 24px;text-align:center;outline:none}
+.dcp-restart-spinner{display:block;color:var(--dsw-alias-label-secondary);animation:dcp-spin 1s linear infinite}
+.dcp-restart-message{max-width:100%;margin:0;color:var(--dsw-alias-label-primary);overflow-wrap:anywhere}
+@keyframes dcp-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.dcp-restart-spinner{animation:none}}
 @media(max-width:600px){[role=dialog]:has(.dcp-section){flex-direction:column}[role=dialog]:has(.dcp-section)>nav{width:100%;padding:12px 12px 0;gap:8px}[role=dialog]:has(.dcp-section)>nav>div:last-child{flex-direction:row;flex-wrap:wrap;overflow:visible;padding-bottom:8px}[role=dialog]:has(.dcp-section)>nav button{flex:none;width:auto;min-width:max-content}[role=dialog]:has(.dcp-section)>nav+div{width:100%;min-height:0}.dcp-title{font-size:18px;line-height:26px}.dcp-intro{margin-bottom:18px}.dcp-row{grid-template-columns:minmax(0,1fr);gap:2px;padding:9px 0}.dcp-actions{align-items:stretch}.dcp-section .dcp-action{width:100%;padding:7px 10px}.dcp-hosts{display:block}.dcp-host{display:block;margin:0 0 4px}}
 `;
     const styleId = "dsh-container-plugin/settings.css";
@@ -144,8 +139,7 @@ window.__ModuleLoader__.load({
         || !Number.isInteger(value.security.uid)
         || !Number.isInteger(value.security.gid)
         || typeof value.security.permissionMode !== "string"
-        || typeof value.security.telemetryDisabled !== "boolean"
-        || typeof value.restartAllowed !== "boolean") {
+        || typeof value.security.telemetryDisabled !== "boolean") {
         throw new Error("invalid dsh-container describe response");
       }
       return {
@@ -161,7 +155,6 @@ window.__ModuleLoader__.load({
           permissionMode: value.security.permissionMode,
           telemetryDisabled: value.security.telemetryDisabled,
         },
-        restartAllowed: value.restartAllowed,
       };
     }
 
@@ -201,6 +194,72 @@ window.__ModuleLoader__.load({
         children);
     }
 
+    function RestartStatusModal({ phase, t }) {
+      const statusRef = useRef(null);
+      const busy = phase === "requesting" || phase === "waiting" || phase === "manual";
+
+      useEffect(() => {
+        if (!busy) return undefined;
+        const appRoot = document.getElementById("root");
+        const previousInert = appRoot?.inert;
+        const previousBodyOverflow = document.body.style.overflow;
+        if (appRoot !== null) appRoot.inert = true;
+        document.body.style.overflow = "hidden";
+
+        const focusStatus = () => {
+          statusRef.current?.focus({ preventScroll: true });
+        };
+        const keepFocusInStatus = (event) => {
+          if (statusRef.current !== null && !statusRef.current.contains(event.target)) {
+            focusStatus();
+          }
+        };
+        const blockBackgroundKeyboard = (event) => {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          if (event.key === "Tab") focusStatus();
+        };
+
+        focusStatus();
+        document.addEventListener("focusin", keepFocusInStatus, true);
+        document.addEventListener("keydown", blockBackgroundKeyboard, true);
+        return () => {
+          document.removeEventListener("focusin", keepFocusInStatus, true);
+          document.removeEventListener("keydown", blockBackgroundKeyboard, true);
+          if (appRoot !== null) appRoot.inert = previousInert ?? false;
+          document.body.style.overflow = previousBodyOverflow;
+        };
+      }, [busy]);
+
+      const message = phase === "requesting"
+        ? t("restart.requesting")
+        : phase === "manual"
+          ? t("restart.manualCheck")
+          : t("restart.waiting");
+
+      return h(Modal, {
+        open: busy,
+        title: message,
+        onClose: () => {},
+        headless: true,
+        className: "dcp-restart-dialog",
+      },
+      h("div", {
+        ref: statusRef,
+        className: "dcp-restart-status",
+        role: "status",
+        tabIndex: -1,
+        "aria-busy": true,
+        "aria-live": "polite",
+      },
+      h("span", { "aria-hidden": true },
+        h(IconLoadingOutline16, {
+          size: 24,
+          className: "dcp-restart-spinner",
+        })),
+      h("p", { className: "dcp-restart-message" }, message)));
+    }
+
     function ContainerSection({ client, t }) {
       const [description, setDescription] = useState(undefined);
       const [loadError, setLoadError] = useState(undefined);
@@ -209,8 +268,8 @@ window.__ModuleLoader__.load({
       const [acknowledged, setAcknowledged] = useState(false);
       const [restartPhase, setRestartPhase] = useState("idle");
       const [restartError, setRestartError] = useState(undefined);
-      const previousInstanceId = useRef(undefined);
       const loadGeneration = useRef(0);
+      const restartGeneration = useRef(0);
 
       const load = useCallback(async () => {
         const generation = ++loadGeneration.current;
@@ -228,41 +287,46 @@ window.__ModuleLoader__.load({
 
       useEffect(() => {
         void load();
-        return () => { loadGeneration.current += 1; };
+        return () => {
+          loadGeneration.current += 1;
+          restartGeneration.current += 1;
+        };
       }, [load]);
 
       const waitForRestart = useCallback(async (oldInstanceId, initialDelayMs = 0) => {
+        const generation = ++restartGeneration.current;
         setRestartPhase("waiting");
-        setRestartError(undefined);
-        const deadline = Date.now() + RESTART_TIMEOUT_MS;
-        if (initialDelayMs > 0) await delay(initialDelayMs);
-        while (Date.now() < deadline) {
-          const remaining = deadline - Date.now();
-          try {
-            const next = await describeWithTimeout(
-              client,
-              Math.max(1, Math.min(REQUEST_TIMEOUT_MS, remaining)),
-            );
-            if (next.instanceId !== oldInstanceId) {
-              window.location.reload();
-              return;
+        const manualCheckTimer = setTimeout(() => {
+          if (generation === restartGeneration.current) setRestartPhase("manual");
+        }, RESTART_MANUAL_CHECK_MS);
+        try {
+          if (initialDelayMs > 0) await delay(initialDelayMs);
+          while (generation === restartGeneration.current) {
+            try {
+              const next = await describeWithTimeout(client, REQUEST_TIMEOUT_MS);
+              if (next.instanceId !== oldInstanceId) {
+                window.location.reload();
+                return;
+              }
+            } catch {
+              // 退出和启动期间的网络错误属于预期状态，继续轮询。
             }
-          } catch {
-            // 退出和启动期间的网络错误属于预期状态，继续轮询。
+            await delay(POLL_INTERVAL_MS);
           }
-          await delay(Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())));
+        } finally {
+          clearTimeout(manualCheckTimer);
         }
-        setRestartPhase("error");
-        setRestartError(t("restart.timeout"));
-      }, [client, t]);
+      }, [client]);
 
       const restart = useCallback(async () => {
-        if (description === undefined || restartPhase === "requesting" || restartPhase === "waiting") return;
+        if (description === undefined
+          || restartPhase === "requesting"
+          || restartPhase === "waiting"
+          || restartPhase === "manual") return;
         setConfirmationOpen(false);
         setAcknowledged(false);
         setRestartPhase("requesting");
         setRestartError(undefined);
-        previousInstanceId.current = description.instanceId;
         try {
           const value = await call(client, "restart");
           if (!isRecord(value)
@@ -289,12 +353,9 @@ window.__ModuleLoader__.load({
       }
       if (description === undefined) return null;
 
-      const busy = restartPhase === "requesting" || restartPhase === "waiting";
-      const restartStatus = restartPhase === "requesting"
-        ? t("restart.requesting")
-        : restartPhase === "waiting"
-          ? t("restart.waiting")
-          : restartError;
+      const busy = restartPhase === "requesting"
+        || restartPhase === "waiting"
+        || restartPhase === "manual";
 
       return h("div", { className: "dcp-section" },
         h("h2", { className: "dcp-title" }, t("title")),
@@ -304,52 +365,36 @@ window.__ModuleLoader__.load({
             h(DefinitionRow, { label: t("field.dshVersion") }, description.dshVersion),
             h(DefinitionRow, { label: t("field.timeZone") }, description.timeZone),
             h(DefinitionRow, { label: t("field.user") }, `UID ${description.security.uid} / GID ${description.security.gid}`))),
-        h(Group, { title: t("group.network") },
+        h(Group, { title: t("group.networkSecurity") },
           h("dl", { className: "dcp-list" },
-            h(DefinitionRow, { label: t("field.relayPort") }, String(description.relayPort)),
-            h(DefinitionRow, { label: t("field.internalPort") }, String(description.internalPort)),
+            h(DefinitionRow, { label: t("field.ports") },
+              `${description.relayPort}(Relay) => ${description.internalPort}(DSH)`),
             h(DefinitionRow, { label: t("field.trustedHosts") },
               description.trustedHosts.length === 0
                 ? t("status.none")
                 : h("span", { className: "dcp-hosts" }, ...description.trustedHosts.map((host, index) =>
-                    h("code", { className: "dcp-host", key: `${host}-${index}` }, host)))))),
-        h(Group, { title: t("group.security") },
-          h("dl", { className: "dcp-list" },
+                    h("code", { className: "dcp-host", key: `${host}-${index}` }, host)))),
             h(DefinitionRow, { label: t("field.permissionMode") }, description.security.permissionMode),
             h(DefinitionRow, { label: t("field.telemetry") },
               description.security.telemetryDisabled ? t("status.disabled") : t("status.enabled")))),
         h(Group, { title: t("group.maintenance") },
-          h("dl", { className: "dcp-list" },
-            h(DefinitionRow, { label: t("field.restart") },
-              description.restartAllowed ? t("status.enabled") : t("status.disabled"))),
-          h("p", { className: "dcp-note" },
-            description.restartAllowed ? t("restart.policy") : t("restart.disabled")),
-          restartStatus === undefined
+          restartError === undefined
             ? null
             : h("p", {
                 className: "dcp-status",
-                role: restartPhase === "error" ? "alert" : "status",
-                "aria-live": "polite",
-              }, restartStatus),
+                role: "alert",
+              }, restartError),
           h("div", { className: "dcp-actions" },
             h(Button, {
               variant: "primary",
               className: "dcp-action",
               icon: h(IconRefreshOutline16, { size: 16 }),
-              disabled: busy || !description.restartAllowed,
+              disabled: busy,
               onClick: () => {
                 setAcknowledged(false);
                 setConfirmationOpen(true);
               },
-            }, t("restart.action")),
-            restartPhase === "error" && previousInstanceId.current !== undefined
-              ? h(Button, {
-                  variant: "outline",
-                  className: "dcp-action",
-                  disabled: busy,
-                  onClick: () => { void waitForRestart(previousInstanceId.current); },
-                }, t("restart.retry"))
-              : null)),
+            }, t("restart.action")))),
         h(RiskConfirmation, {
           open: confirmationOpen,
           title: t("confirm.title"),
@@ -366,7 +411,8 @@ window.__ModuleLoader__.load({
             setConfirmationOpen(false);
           },
           onConfirm: () => { void restart(); },
-        }));
+        }),
+        h(RestartStatusModal, { phase: restartPhase, t }));
     }
 
     const inject = ["slots", "locale", "connection"];

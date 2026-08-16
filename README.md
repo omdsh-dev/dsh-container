@@ -12,33 +12,37 @@
 安装 Docker 后直接运行：
 
 ```sh
-docker run -d -p 3080:3080 -e "DSH_CONTAINER_TRUSTED_HOSTS=localhost,127.0.0.1" ghcr.io/juexe/dsh-container:latest
+docker run -d --name dsh-container --restart unless-stopped -p 3080:3080 -e "DSH_CONTAINER_TRUSTED_HOSTS=localhost,127.0.0.1" ghcr.io/juexe/dsh-container:latest
 ```
 
 容器通过健康检查后访问 <http://localhost:3080>。通过主机名或局域网 IP 访问时，将 `DSH_CONTAINER_TRUSTED_HOSTS` 改为浏览器实际使用的主机名、IP 或 `host:port`，多个值使用逗号分隔。
 
-这条最简命令适合快速体验，不包含持久化、自动重启和额外的容器安全限制。删除容器会同时丢失其中的设置和工作区数据，WebUI 中的容器重启能力也保持禁用。
+这条快速命令适合体验，启用了自动重启，但不包含持久化和额外的容器安全限制。删除容器会同时丢失其中的设置和工作区数据。
 
 ## 长期运行
 
-推荐使用命名卷保存数据，并添加运行限制：
+推荐使用命名卷保存数据：
 
 ```sh
 docker run -d \
   --name dsh-container \
   --restart unless-stopped \
-  --init \
-  --read-only \
-  --cap-drop ALL \
-  --security-opt no-new-privileges:true \
-  --stop-timeout 20 \
   -p 3080:3080 \
   -e "DSH_CONTAINER_TRUSTED_HOSTS=localhost,127.0.0.1" \
-  -e "DSH_CONTAINER_ALLOW_RESTART=1" \
-  --tmpfs /tmp:rw,nosuid,nodev,size=512m,mode=1777 \
   -v dsh-workspace:/home/node \
   -v dsh-config:/home/node/.dsh \
   ghcr.io/juexe/dsh-container:latest
+```
+
+建议在上面命令的镜像名称前加入以下运行约束：
+
+```sh
+--init \
+--read-only \
+--cap-drop ALL \
+--security-opt no-new-privileges:true \
+--stop-timeout 20 \
+--tmpfs /tmp:rw,nosuid,nodev,size=512m,mode=1777
 ```
 
 如需直接访问宿主机文件，可将两个命名卷参数替换为绑定挂载：
@@ -69,11 +73,11 @@ docker compose ps
 
 ## DSH 容器设置
 
-WebUI 设置导航末尾的「DSH 容器」页面提供当前实例的只读有效配置总览，包括 DSH 版本、trusted hosts、容器内 relay 与 DSH 端口、时区、运行 UID/GID、权限模式、遥测状态和 WebUI 重启能力。页面不会读取或展示宿主绑定地址、发布端口、镜像引用、代理地址、API Key、凭据或其他环境变量，也不支持修改配置、更新镜像或重建容器。
+WebUI 设置导航末尾的「DSH 容器」页面按「运行环境」「网络和安全」「维护」显示当前实例的只读有效配置，包括 DSH 版本、时区、运行 UID/GID、trusted hosts、权限模式和遥测状态。端口一行显示容器内对外 relay 端口到 DSH Web 服务端口的转发关系，例如 `3080(Relay) => 3081(DSH)`；两者都不是宿主机发布端口。页面不会读取或展示宿主绑定地址、发布端口、Docker restart policy、镜像引用、代理地址、API Key、凭据或其他环境变量，也不支持修改配置、更新镜像或重建容器。
 
-WebUI 重启默认禁用。只有部署者同时配置 Docker restart policy，并将 `DSH_CONTAINER_ALLOW_RESTART` 精确设置为 `1` 时才能启用；上面的长期运行命令和仓库 Compose 配置已经同时设置两者。页面无法读取 Docker 的 restart policy，能力开关只是部署者对策略已经就绪的明确声明。
+通过 trusted-host 校验的客户端始终可以调用 WebUI 重启接口，没有额外的环境变量门控。要让容器退出后自动恢复，Docker restart policy 必须配置为 `on-failure[:max-retries]`、`always` 或 `unless-stopped`；配置为 `no` 或未配置时，容器会保持停止。Docker 只会在容器成功运行至少 10 秒后应用 restart policy，因此启动后 10 秒内退出的容器也可能不会自动恢复。
 
-重启会中断正在运行的 Agent、终端和网络连接，确认框要求先勾选中断确认。接受请求后，DSH 会通知容器入口脚本优雅停止 DSH 与 relay，并以状态码 `75` 退出；Docker 随后拉起同一容器。浏览器最多等待 90 秒，以新进程的实例 ID 确认恢复后刷新页面。若只设置 `DSH_CONTAINER_ALLOW_RESTART=1` 而没有 restart policy，容器会退出且不会自动恢复。
+重启会中断正在运行的 Agent、终端和网络连接，确认框要求先勾选中断确认，并列出有效 restart policy 与无策略的后果。接受请求后，DSH 会通知容器入口脚本优雅停止 DSH 与 relay，并以状态码 `75` 退出；Docker 随后按其策略拉起同一容器。浏览器会阻塞 WebUI 并持续探测新进程的实例 ID，检测到新实例后自动刷新；90 秒后仅将状态文案升级为需要人工检查 Docker 容器状态并手动启动，探测不会停止。
 
 ## 安全说明
 
@@ -81,7 +85,7 @@ DSH Web UI 可以驱动 Agent 在工作区中执行命令。本项目默认不�
 
 trusted-host 是 Host 与同源信任边界，不是身份认证。**请勿在公网环境部署本服务；因公网暴露或访问控制配置不当造成的一切后果由部署者自行承担。** 仅需本机访问时，可将端口参数改为 `-p 127.0.0.1:3080:3080`；需要跨设备访问时，应仅在可信内网中使用，并在反向代理或访问网关中配置 HTTPS、认证和访问控制。
 
-镜像始终使用非 root 用户运行。长期运行命令和 Compose 还会使用只读根文件系统、删除 Linux capabilities、启用 `no-new-privileges`，且不会挂载 Docker socket。
+镜像始终使用非 root 用户运行。推荐运行约束片段和 Compose 还会使用只读根文件系统、删除 Linux capabilities、启用 `no-new-privileges`，且不会挂载 Docker socket。
 
 部分较旧的 Linux 内核无法使用 DSH 所需的 Landlock 或非特权 Bubblewrap，因此镜像将 `DSH_PERMISSION_MODE` 设置为 `danger-full-access`。该设置只影响容器内部，仍需依靠容器边界和可信网络限制风险。
 
@@ -101,7 +105,6 @@ trusted-host 是 Host 与同源信任边界，不是身份认证。**请勿在�
 | `DSH_CONTAINER_PORT` | `3080` | Compose 发布到宿主机的端口 |
 | `DSH_CONTAINER_RELAY_PORT` | `3080` | 容器内对外 relay 端口 |
 | `DSH_CONTAINER_INTERNAL_PORT` | `3081` | 容器内 DSH Web 服务端口 |
-| `DSH_CONTAINER_ALLOW_RESTART` | 未设置 | 仅精确值 `1` 启用 WebUI 重启接口；必须同时配置 Docker restart policy |
 | `DSH_CONTAINER_DSH_VERSION` | `latest` | 源码构建时安装的 DSH npm 版本或 dist-tag |
 
 ### DSH 原生配置

@@ -64,7 +64,6 @@ function describeContainer() {
       permissionMode: process.env.DSH_PERMISSION_MODE ?? "unknown",
       telemetryDisabled: (process.env.DSH_TELEMETRY_DISABLED ?? "").length > 0,
     },
-    restartAllowed: process.env.DSH_CONTAINER_ALLOW_RESTART === "1",
   };
 }
 
@@ -84,10 +83,6 @@ export function apply(ctx) {
 
       if (endpoint !== "restart") {
         return badRequest(`unknown dsh-container endpoint: ${endpoint}`);
-      }
-
-      if (process.env.DSH_CONTAINER_ALLOW_RESTART !== "1") {
-        return badRequest("container restart is disabled by the deployment");
       }
 
       if (!restartScheduled) {
