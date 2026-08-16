@@ -1,6 +1,11 @@
 **
 !Dockerfile
 !docker/
+!docker/dsh-container-plugin/
+!docker/dsh-container-plugin/package.json
+!docker/dsh-container-plugin/lib/
+!docker/dsh-container-plugin/lib/index.js
+!docker/dsh-container-plugin/lib/client.js
 !docker/entrypoint.sh
 !docker/patch-dsh.mjs
 !docker/random-uuid-polyfill.js

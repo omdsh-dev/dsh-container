@@ -1,4 +1,4 @@
-import { chmod, copyFile, readFile, writeFile } from "node:fs/promises";
+import { chmod, copyFile, cp, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const npmRoot = process.argv[2];
@@ -6,7 +6,9 @@ if (!npmRoot) {
   throw new Error("缺少 npm 全局模块目录参数");
 }
 
-const packageRoot = path.join(npmRoot, "@deepseek-ai", "dsh", "node_modules", "@deepseek-ai");
+const dshRoot = path.join(npmRoot, "@deepseek-ai", "dsh");
+const dshManifestPath = path.join(dshRoot, "package.json");
+const packageRoot = path.join(dshRoot, "node_modules", "@deepseek-ai");
 const frontendDirectory = path.join(packageRoot, "dsh-web-frontend", "dist");
 const frontendIndex = path.join(frontendDirectory, "index.html");
 const polyfillTarget = path.join(frontendDirectory, "random-uuid-polyfill.js");
@@ -19,6 +21,95 @@ const settingsModelsClient = path.join(
   "lib",
   "client.js",
 );
+const webAppPatch = path.join(packageRoot, "dsh-web-app", "cordis.patch.yml");
+const containerPluginSource = "/tmp/dsh-container-plugin";
+const containerPluginTarget = path.join(dshRoot, "node_modules", "dsh-container-plugin");
+const containerPluginManifest = path.join(containerPluginTarget, "package.json");
+
+function requireExactAnchor(source, anchor, message) {
+  if (source.split(anchor).length !== 2) {
+    throw new Error(message);
+  }
+}
+
+const dshManifest = JSON.parse(await readFile(dshManifestPath, "utf8"));
+if (typeof dshManifest.version !== "string" || dshManifest.version.length === 0) {
+  throw new Error("无法读取实际安装的 DSH 版本");
+}
+if (
+  dshManifest.dependencies === null
+  || typeof dshManifest.dependencies !== "object"
+  || Array.isArray(dshManifest.dependencies)
+) {
+  throw new Error("DSH 安装清单 dependencies 已变化，需要复核插件注入");
+}
+
+const moduleLoaderAnchor = `window.__ModuleLoader__.load({
+\tid: "@deepseek-ai/dsh-client-ui-settings-models",
+\tfactory: (require) => {`;
+const settingsSectionAnchor = `ctx.slots.inject("settings.section", () => ctx.slots.register({
+\t\t\t\tname: "settings.section",
+\t\t\t\tid: "models",`;
+const connectionRpcAnchor =
+  "handle: (channel, handler, options) => this.register(owner, channel, handler, options),";
+const connectionTrustedHostAnchor =
+  'const trustedHosts = options.authority === "loopback" ? [] : this.trustedHosts;';
+const settingsExtensionSource = await readFile(settingsModelsClient, "utf8");
+const connectionExtensionSource = await readFile(connectionServer, "utf8");
+
+requireExactAnchor(
+  settingsExtensionSource,
+  moduleLoaderAnchor,
+  "DSH 浏览器模块加载器已变化，需要复核容器插件入口",
+);
+requireExactAnchor(
+  settingsExtensionSource,
+  settingsSectionAnchor,
+  "DSH 设置 section 扩展点已变化，需要复核容器设置页注册",
+);
+requireExactAnchor(
+  connectionExtensionSource,
+  connectionRpcAnchor,
+  "DSH Connection RPC 扩展点已变化，需要复核容器 RPC channel",
+);
+requireExactAnchor(
+  connectionExtensionSource,
+  connectionTrustedHostAnchor,
+  "DSH Connection RPC 权限模型已变化，需要复核 trusted-host 防护",
+);
+
+await cp(containerPluginSource, containerPluginTarget, {
+  recursive: true,
+  force: true,
+});
+
+const pluginManifest = JSON.parse(await readFile(containerPluginManifest, "utf8"));
+pluginManifest.dshContainer = { dshVersion: dshManifest.version };
+await writeFile(containerPluginManifest, `${JSON.stringify(pluginManifest, undefined, 2)}\n`);
+
+if (dshManifest.dependencies[pluginManifest.name] !== pluginManifest.version) {
+  dshManifest.dependencies[pluginManifest.name] = pluginManifest.version;
+  await writeFile(dshManifestPath, `${JSON.stringify(dshManifest, undefined, 2)}\n`);
+}
+
+const containerPluginRow = `    - id: dsh-container
+      name: 'dsh-container-plugin'`;
+const webProfileAnchor = `    - id: ui-settings-plugins
+      name: '@deepseek-ai/dsh-client-ui-settings-plugins'`;
+let webProfileSource = await readFile(webAppPatch, "utf8");
+const containerPluginRowCount = webProfileSource.split(containerPluginRow).length - 1;
+if (containerPluginRowCount === 0) {
+  if (webProfileSource.split(webProfileAnchor).length !== 2) {
+    throw new Error("DSH Web 插件清单已变化，需要复核容器插件注入");
+  }
+  webProfileSource = webProfileSource.replace(
+    webProfileAnchor,
+    `${webProfileAnchor}\n\n${containerPluginRow}`,
+  );
+  await writeFile(webAppPatch, webProfileSource);
+} else if (containerPluginRowCount !== 1) {
+  throw new Error("DSH Web 插件清单包含重复的容器插件，需要复核插件注入");
+}
 
 const moduleTag = '    <script type="module"';
 const polyfillTag = '    <script src="/random-uuid-polyfill.js"></script>\n';
@@ -39,7 +130,7 @@ const upstreamGuard =
   'if (method !== void 0 && PRIVILEGED_METHODS.has(method) && !isTrustedApiRequest(request, [])) return new Response("forbidden", { status: 403 });';
 const removedGuardMarker =
   '/* dsh-container: trusted-host validation is the sole API access check. */';
-let serverSource = await readFile(connectionServer, "utf8");
+let serverSource = connectionExtensionSource;
 
 if (!serverSource.includes(removedGuardMarker)) {
   if (!serverSource.includes(upstreamGuard)) {

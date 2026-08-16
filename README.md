@@ -17,7 +17,7 @@ docker run -d -p 3080:3080 -e "DSH_CONTAINER_TRUSTED_HOSTS=localhost,127.0.0.1" 
 
 容器通过健康检查后访问 <http://localhost:3080>。通过主机名或局域网 IP 访问时，将 `DSH_CONTAINER_TRUSTED_HOSTS` 改为浏览器实际使用的主机名、IP 或 `host:port`，多个值使用逗号分隔。
 
-这条最简命令适合快速体验，不包含持久化、自动重启和额外的容器安全限制。删除容器会同时丢失其中的设置和工作区数据。
+这条最简命令适合快速体验，不包含持久化、自动重启和额外的容器安全限制。删除容器会同时丢失其中的设置和工作区数据，WebUI 中的容器重启能力也保持禁用。
 
 ## 长期运行
 
@@ -34,6 +34,7 @@ docker run -d \
   --stop-timeout 20 \
   -p 3080:3080 \
   -e "DSH_CONTAINER_TRUSTED_HOSTS=localhost,127.0.0.1" \
+  -e "DSH_CONTAINER_ALLOW_RESTART=1" \
   --tmpfs /tmp:rw,nosuid,nodev,size=512m,mode=1777 \
   -v dsh-workspace:/home/node \
   -v dsh-config:/home/node/.dsh \
@@ -66,6 +67,14 @@ docker compose ps
 
 `.env` 中的 `DSH_CONTAINER_TRUSTED_HOSTS` 必须按实际访问地址修改。仓库不包含针对特定设备或环境的自动部署脚本。
 
+## DSH 容器设置
+
+WebUI 设置导航末尾的「DSH 容器」页面提供当前实例的只读有效配置总览，包括 DSH 版本、trusted hosts、容器内 relay 与 DSH 端口、时区、运行 UID/GID、权限模式、遥测状态和 WebUI 重启能力。页面不会读取或展示宿主绑定地址、发布端口、镜像引用、代理地址、API Key、凭据或其他环境变量，也不支持修改配置、更新镜像或重建容器。
+
+WebUI 重启默认禁用。只有部署者同时配置 Docker restart policy，并将 `DSH_CONTAINER_ALLOW_RESTART` 精确设置为 `1` 时才能启用；上面的长期运行命令和仓库 Compose 配置已经同时设置两者。页面无法读取 Docker 的 restart policy，能力开关只是部署者对策略已经就绪的明确声明。
+
+重启会中断正在运行的 Agent、终端和网络连接，确认框要求先勾选中断确认。接受请求后，DSH 会通知容器入口脚本优雅停止 DSH 与 relay，并以状态码 `75` 退出；Docker 随后拉起同一容器。浏览器最多等待 90 秒，以新进程的实例 ID 确认恢复后刷新页面。若只设置 `DSH_CONTAINER_ALLOW_RESTART=1` 而没有 restart policy，容器会退出且不会自动恢复。
+
 ## 安全说明
 
 DSH Web UI 可以驱动 Agent 在工作区中执行命令。本项目默认不提供认证；通过 DSH trusted-host 和同源校验的客户端可以调用全部 API，包括设置、凭据、Agent Preset、模型探测和宿主操作，因此只适合在完全可信的网络中使用。
@@ -92,6 +101,7 @@ trusted-host 是 Host 与同源信任边界，不是身份认证。**请勿在�
 | `DSH_CONTAINER_PORT` | `3080` | Compose 发布到宿主机的端口 |
 | `DSH_CONTAINER_RELAY_PORT` | `3080` | 容器内对外 relay 端口 |
 | `DSH_CONTAINER_INTERNAL_PORT` | `3081` | 容器内 DSH Web 服务端口 |
+| `DSH_CONTAINER_ALLOW_RESTART` | 未设置 | 仅精确值 `1` 启用 WebUI 重启接口；必须同时配置 Docker restart policy |
 | `DSH_CONTAINER_DSH_VERSION` | `latest` | 源码构建时安装的 DSH npm 版本或 dist-tag |
 
 ### DSH 原生配置

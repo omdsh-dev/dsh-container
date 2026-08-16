@@ -33,13 +33,18 @@ RUN npm install --global --no-audit --no-fund \
     && mkdir -p /home/node/.dsh /workspace \
     && chown -R node:node /home/node /workspace
 
+COPY --chown=root:root docker/dsh-container-plugin /tmp/dsh-container-plugin
+
 COPY --chown=root:root \
     docker/patch-dsh.mjs \
     docker/random-uuid-polyfill.js \
     /tmp/
 
 RUN node /tmp/patch-dsh.mjs "$(npm root --global)" \
-    && rm /tmp/patch-dsh.mjs /tmp/random-uuid-polyfill.js
+    && rm -rf \
+        /tmp/dsh-container-plugin \
+        /tmp/patch-dsh.mjs \
+        /tmp/random-uuid-polyfill.js
 
 COPY --chown=root:root docker/entrypoint.sh /usr/local/bin/dsh-container-entrypoint
 

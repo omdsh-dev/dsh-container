@@ -22,6 +22,7 @@ services:
       DSH_HOME: /home/node/.dsh
       DSH_PERMISSION_MODE: danger-full-access
       DSH_TELEMETRY_DISABLED: "1"
+      DSH_CONTAINER_ALLOW_RESTART: "1"
       DSH_CONTAINER_TRUSTED_HOSTS: ${DSH_CONTAINER_TRUSTED_HOSTS:?请在 .env 中设置 DSH_CONTAINER_TRUSTED_HOSTS}
       NODE_USE_ENV_PROXY: "1"
       TZ: ${TZ:-Asia/Shanghai}
