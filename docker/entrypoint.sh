@@ -5,6 +5,7 @@ set -Eeuo pipefail
 relay_port_value="${DSH_CONTAINER_RELAY_PORT:-3080}"
 app_port_value="${DSH_CONTAINER_INTERNAL_PORT:-3081}"
 trusted_hosts_value="${DSH_CONTAINER_TRUSTED_HOSTS:-}"
+authentication_enabled=0
 
 require_port() {
   local name="$1"
@@ -52,6 +53,15 @@ trusted_hosts_csv="$(IFS=,; printf '%s' "${trusted_hosts[*]}")"
 export DSH_CONTAINER_RELAY_PORT="$relay_port"
 export DSH_CONTAINER_INTERNAL_PORT="$app_port"
 export DSH_CONTAINER_TRUSTED_HOSTS="$trusted_hosts_csv"
+
+if [[ -v DSH_CONTAINER_KEY ]]; then
+  if node /opt/dsh-container/auth-relay/validate-key.mjs; then
+    authentication_enabled=1
+  else
+    status="$?"
+    exit "$status"
+  fi
+fi
 
 dsh_entrypoint="$(readlink -f "$(command -v dsh)")"
 if [[ ! -f "$dsh_entrypoint" ]]; then
@@ -104,9 +114,13 @@ trap on_term TERM
 trap on_int INT
 trap on_restart USR1
 
-socat \
-  "TCP-LISTEN:${relay_port},bind=0.0.0.0,reuseaddr,fork" \
-  "TCP:127.0.0.1:${app_port}" &
+if (( authentication_enabled )); then
+  node /opt/dsh-container/auth-relay/index.mjs &
+else
+  socat \
+    "TCP-LISTEN:${relay_port},bind=0.0.0.0,reuseaddr,fork" \
+    "TCP:127.0.0.1:${app_port}" &
+fi
 relay_pid="$!"
 
 node --expose-internals "$dsh_entrypoint" web \

@@ -63,6 +63,7 @@ function describeContainer() {
       gid: process.getgid?.() ?? -1,
       permissionMode: process.env.DSH_PERMISSION_MODE ?? "unknown",
       telemetryDisabled: (process.env.DSH_TELEMETRY_DISABLED ?? "").length > 0,
+      authenticationEnabled: Object.hasOwn(process.env, "DSH_CONTAINER_KEY"),
     },
   };
 }

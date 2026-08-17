@@ -39,12 +39,7 @@ services:
       test:
         - CMD
         - node
-        - -e
-        - >-
-          const port = process.env.DSH_CONTAINER_INTERNAL_PORT ?? '3081';
-          fetch('http://127.0.0.1:' + port + '/').then(response => {
-            if (!response.ok) process.exit(1)
-          }).catch(() => process.exit(1))
+        - /usr/local/lib/dsh-container/healthcheck.mjs
       interval: 10s
       timeout: 5s
       retries: 12

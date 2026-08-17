@@ -1,3 +1,20 @@
+FROM node:24-bookworm-slim AS auth-relay-build
+
+WORKDIR /build
+
+RUN corepack enable \
+    && corepack install --global pnpm@11.7.0
+
+COPY docker/auth-relay/package.json docker/auth-relay/pnpm-lock.yaml ./
+
+RUN pnpm install --frozen-lockfile
+
+COPY docker/auth-relay/lib.mjs docker/auth-relay/server.mjs ./
+COPY docker/auth-relay/test ./test
+
+RUN pnpm test \
+    && pnpm prune --prod
+
 FROM node:24-bookworm-slim
 
 ARG DSH_CONTAINER_DSH_VERSION=latest
@@ -35,7 +52,17 @@ RUN npm install --global --no-audit --no-fund \
 
 COPY --chown=root:root docker/dsh-container-plugin /tmp/dsh-container-plugin
 
+COPY --from=auth-relay-build --chown=root:root /build/node_modules /opt/dsh-container/auth-relay/node_modules
 COPY --chown=root:root \
+    docker/auth-relay/package.json \
+    docker/auth-relay/index.mjs \
+    docker/auth-relay/lib.mjs \
+    docker/auth-relay/server.mjs \
+    docker/auth-relay/validate-key.mjs \
+    /opt/dsh-container/auth-relay/
+
+COPY --chown=root:root \
+    docker/auth-bootstrap.js \
     docker/patch-dsh.mjs \
     docker/random-uuid-polyfill.js \
     /tmp/
@@ -43,12 +70,17 @@ COPY --chown=root:root \
 RUN node /tmp/patch-dsh.mjs "$(npm root --global)" \
     && rm -rf \
         /tmp/dsh-container-plugin \
+        /tmp/auth-bootstrap.js \
         /tmp/patch-dsh.mjs \
         /tmp/random-uuid-polyfill.js
 
-COPY --chown=root:root docker/entrypoint.sh /usr/local/bin/dsh-container-entrypoint
+COPY --chown=root:root \
+    docker/entrypoint.sh \
+    docker/healthcheck.mjs \
+    /usr/local/lib/dsh-container/
 
-RUN chmod 0755 /usr/local/bin/dsh-container-entrypoint
+RUN ln -s /usr/local/lib/dsh-container/entrypoint.sh /usr/local/bin/dsh-container-entrypoint \
+    && chmod 0755 /usr/local/lib/dsh-container/entrypoint.sh
 
 USER node
 WORKDIR /home/node
@@ -56,6 +88,6 @@ WORKDIR /home/node
 EXPOSE 3080
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=12 \
-    CMD node -e "const port = process.env.DSH_CONTAINER_INTERNAL_PORT ?? '3081'; fetch('http://127.0.0.1:' + port + '/').then(response => { if (!response.ok) process.exit(1) }).catch(() => process.exit(1))"
+    CMD ["node", "/usr/local/lib/dsh-container/healthcheck.mjs"]
 
 ENTRYPOINT ["/usr/local/bin/dsh-container-entrypoint"]

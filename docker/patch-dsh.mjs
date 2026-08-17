@@ -12,6 +12,9 @@ const packageRoot = path.join(dshRoot, "node_modules", "@deepseek-ai");
 const frontendDirectory = path.join(packageRoot, "dsh-web-frontend", "dist");
 const frontendIndex = path.join(frontendDirectory, "index.html");
 const polyfillTarget = path.join(frontendDirectory, "random-uuid-polyfill.js");
+const authBootstrapTarget = path.join(frontendDirectory, "auth-bootstrap.js");
+const faviconSource = path.join(frontendDirectory, "favicon.svg");
+const relayFaviconTarget = "/opt/dsh-container/auth-relay/favicon.svg";
 const connectionServer = path.join(packageRoot, "dsh-client-connection", "lib", "index.js");
 const hostApiProxy = path.join(packageRoot, "dsh-host-apiproxy", "lib", "index.js");
 const settingsClient = path.join(packageRoot, "dsh-client-ui-settings", "lib", "client.js");
@@ -113,18 +116,24 @@ if (containerPluginRowCount === 0) {
 
 const moduleTag = '    <script type="module"';
 const polyfillTag = '    <script src="/random-uuid-polyfill.js"></script>\n';
+const authBootstrapTag = '    <script src="/auth-bootstrap.js"></script>\n';
 let html = await readFile(frontendIndex, "utf8");
 
-if (!html.includes(polyfillTag)) {
+for (const tag of [polyfillTag, authBootstrapTag]) {
+  if (html.includes(tag)) continue;
   if (!html.includes(moduleTag)) {
     throw new Error("无法定位 DSH 前端模块入口");
   }
-  html = html.replace(moduleTag, `${polyfillTag}${moduleTag}`);
-  await writeFile(frontendIndex, html);
+  html = html.replace(moduleTag, `${tag}${moduleTag}`);
 }
+await writeFile(frontendIndex, html);
 
 await copyFile("/tmp/random-uuid-polyfill.js", polyfillTarget);
+await copyFile("/tmp/auth-bootstrap.js", authBootstrapTarget);
+await copyFile(faviconSource, relayFaviconTarget);
 await chmod(polyfillTarget, 0o644);
+await chmod(authBootstrapTarget, 0o644);
+await chmod(relayFaviconTarget, 0o644);
 
 const upstreamGuard =
   'if (method !== void 0 && PRIVILEGED_METHODS.has(method) && !isTrustedApiRequest(request, [])) return new Response("forbidden", { status: 403 });';

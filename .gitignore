@@ -6,3 +6,4 @@ workspace/
 data/
 .playwright-cli/
 *.log
+node_modules/

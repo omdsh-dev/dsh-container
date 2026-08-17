@@ -16,6 +16,8 @@ window.__ModuleLoader__.load({
     const { createElement: h, useCallback, useEffect, useRef, useState } = React;
 
     const RPC_CHANNEL = "/dsh-container";
+    const LOGIN_PATH = "/_dsh-container/auth/login";
+    const LOGOUT_PATH = "/_dsh-container/auth/logout";
     const RESTART_MANUAL_CHECK_MS = 90_000;
     const POLL_INTERVAL_MS = 1_000;
     const REQUEST_TIMEOUT_MS = 3_000;
@@ -27,6 +29,7 @@ window.__ModuleLoader__.load({
       intro: "当前容器实例的只读有效配置。",
       "group.runtime": "运行环境",
       "group.networkSecurity": "网络和安全",
+      "group.authentication": "身份认证",
       "group.maintenance": "维护",
       "field.dshVersion": "DSH 版本",
       "field.timeZone": "时区",
@@ -35,12 +38,16 @@ window.__ModuleLoader__.load({
       "field.trustedHosts": "Trusted hosts",
       "field.permissionMode": "权限模式",
       "field.telemetry": "遥测",
+      "field.authentication": "管理员密钥认证",
       "status.enabled": "已启用",
       "status.disabled": "已禁用",
       "status.none": "无",
       "load.loading": "正在读取容器配置...",
       "load.failed": "无法读取容器配置",
       retry: "重试",
+      "logout.action": "退出本设备",
+      "logout.progress": "正在退出...",
+      "logout.failed": "退出失败",
       "restart.action": "重启容器",
       "restart.requesting": "正在提交重启请求...",
       "restart.waiting": "容器正在重启，等待新实例恢复...",
@@ -58,6 +65,7 @@ window.__ModuleLoader__.load({
       intro: "Read-only effective configuration for the current container instance.",
       "group.runtime": "Runtime",
       "group.networkSecurity": "Network and security",
+      "group.authentication": "Authentication",
       "group.maintenance": "Maintenance",
       "field.dshVersion": "DSH version",
       "field.timeZone": "Time zone",
@@ -66,12 +74,16 @@ window.__ModuleLoader__.load({
       "field.trustedHosts": "Trusted hosts",
       "field.permissionMode": "Permission mode",
       "field.telemetry": "Telemetry",
+      "field.authentication": "Administrator key authentication",
       "status.enabled": "Enabled",
       "status.disabled": "Disabled",
       "status.none": "None",
       "load.loading": "Loading the container configuration...",
       "load.failed": "Could not load the container configuration",
       retry: "Retry",
+      "logout.action": "Sign out this device",
+      "logout.progress": "Signing out...",
+      "logout.failed": "Sign out failed",
       "restart.action": "Restart container",
       "restart.requesting": "Submitting the restart request...",
       "restart.waiting": "The container is restarting. Waiting for the new instance...",
@@ -139,7 +151,8 @@ window.__ModuleLoader__.load({
         || !Number.isInteger(value.security.uid)
         || !Number.isInteger(value.security.gid)
         || typeof value.security.permissionMode !== "string"
-        || typeof value.security.telemetryDisabled !== "boolean") {
+        || typeof value.security.telemetryDisabled !== "boolean"
+        || typeof value.security.authenticationEnabled !== "boolean") {
         throw new Error("invalid dsh-container describe response");
       }
       return {
@@ -154,6 +167,7 @@ window.__ModuleLoader__.load({
           gid: value.security.gid,
           permissionMode: value.security.permissionMode,
           telemetryDisabled: value.security.telemetryDisabled,
+          authenticationEnabled: value.security.authenticationEnabled,
         },
       };
     }
@@ -268,6 +282,8 @@ window.__ModuleLoader__.load({
       const [acknowledged, setAcknowledged] = useState(false);
       const [restartPhase, setRestartPhase] = useState("idle");
       const [restartError, setRestartError] = useState(undefined);
+      const [logoutPhase, setLogoutPhase] = useState("idle");
+      const [logoutError, setLogoutError] = useState(undefined);
       const loadGeneration = useRef(0);
       const restartGeneration = useRef(0);
 
@@ -343,6 +359,20 @@ window.__ModuleLoader__.load({
         }
       }, [client, description, restartPhase, t, waitForRestart]);
 
+      const logout = useCallback(async () => {
+        if (logoutPhase === "requesting") return;
+        setLogoutPhase("requesting");
+        setLogoutError(undefined);
+        try {
+          const response = await globalThis.fetch(LOGOUT_PATH, { method: "POST" });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          window.location.assign(LOGIN_PATH);
+        } catch (error) {
+          setLogoutPhase("error");
+          setLogoutError(`${t("logout.failed")}: ${messageOf(error)}`);
+        }
+      }, [logoutPhase, t]);
+
       if (loading && description === undefined) {
         return h("div", { className: "dcp-section", role: "status" }, t("load.loading"));
       }
@@ -356,6 +386,7 @@ window.__ModuleLoader__.load({
       const busy = restartPhase === "requesting"
         || restartPhase === "waiting"
         || restartPhase === "manual";
+      const logoutBusy = logoutPhase === "requesting";
 
       return h("div", { className: "dcp-section" },
         h("h2", { className: "dcp-title" }, t("title")),
@@ -377,6 +408,26 @@ window.__ModuleLoader__.load({
             h(DefinitionRow, { label: t("field.permissionMode") }, description.security.permissionMode),
             h(DefinitionRow, { label: t("field.telemetry") },
               description.security.telemetryDisabled ? t("status.disabled") : t("status.enabled")))),
+        h(Group, { title: t("group.authentication") },
+          h("dl", { className: "dcp-list" },
+            h(DefinitionRow, { label: t("field.authentication") },
+              description.security.authenticationEnabled ? t("status.enabled") : t("status.disabled"))),
+          !description.security.authenticationEnabled
+            ? null
+            : h("div", null,
+              logoutError === undefined
+                ? null
+                : h("p", { className: "dcp-status", role: "alert" }, logoutError),
+              h(Button, {
+                variant: "outline",
+                className: "dcp-action",
+                icon: logoutBusy ? h(IconLoadingOutline16, {
+                  size: 16,
+                  className: "dcp-restart-spinner",
+                }) : undefined,
+                disabled: logoutBusy || busy,
+                onClick: () => { void logout(); },
+              }, logoutBusy ? t("logout.progress") : t("logout.action")))),
         h(Group, { title: t("group.maintenance") },
           restartError === undefined
             ? null
@@ -389,7 +440,7 @@ window.__ModuleLoader__.load({
               variant: "primary",
               className: "dcp-action",
               icon: h(IconRefreshOutline16, { size: 16 }),
-              disabled: busy,
+              disabled: busy || logoutBusy,
               onClick: () => {
                 setAcknowledged(false);
                 setConfirmationOpen(true);
