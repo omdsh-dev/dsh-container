@@ -1,4 +1,4 @@
-name: 发布 GHCR 镜像
+name: GHCR
 
 on:
   push:

@@ -11,7 +11,7 @@
 - **容器加固与持久化：** 镜像以非 root 用户运行；推荐使用只读根文件系统、删除 Linux capabilities，并独立保存配置与工作区。
 - **Web 端管理：** 可在 WebUI 中查看容器有效配置，并发起平滑重启。
 
-![DSH 容器设置页](settings.png)
+![DSH 容器设置页](docs/settings.png)
 
 > [!WARNING]
 > **请勿将本服务直接暴露到公网。** dsh-container 不提供身份认证，trusted-host 也不能替代认证。仅在可信网络中使用；远程访问必须额外配置 HTTPS、身份认证和访问控制。
