@@ -181,14 +181,16 @@ await writeFile(hostApiProxy, hostSource);
 const loopbackSettingsMode = 'connection.isLoopback ? "host" : "memory"';
 const trustedHostSettingsMode =
   '"host" /* dsh-container: trusted-host clients persist settings on the Host. */';
+let settingsClientSource = await readFile(settingsClient, "utf8");
+const loopbackSettingsModeCount = settingsClientSource.split(loopbackSettingsMode).length - 1;
+const trustedHostSettingsModeCount = settingsClientSource.split(trustedHostSettingsMode).length - 1;
 
-for (const target of [settingsClient, settingsModelsClient]) {
-  let clientSource = await readFile(target, "utf8");
-  if (!clientSource.includes(trustedHostSettingsMode)) {
-    if (!clientSource.includes(loopbackSettingsMode)) {
-      throw new Error(`DSH 客户端设置持久化实现已变化，需要复核兼容补丁：${target}`);
-    }
-    clientSource = clientSource.replace(loopbackSettingsMode, trustedHostSettingsMode);
-    await writeFile(target, clientSource);
-  }
+if (loopbackSettingsModeCount === 2 && trustedHostSettingsModeCount === 0) {
+  settingsClientSource = settingsClientSource.replaceAll(
+    loopbackSettingsMode,
+    trustedHostSettingsMode,
+  );
+  await writeFile(settingsClient, settingsClientSource);
+} else if (loopbackSettingsModeCount !== 0 || trustedHostSettingsModeCount !== 2) {
+  throw new Error("DSH 客户端设置持久化实现已变化，需要复核兼容补丁");
 }
