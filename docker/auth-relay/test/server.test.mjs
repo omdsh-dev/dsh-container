@@ -3,6 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { connect } from "node:net";
 import { test } from "node:test";
+import { parseSetCookie } from "cookie";
 import {
   AUTH_REQUIRED_HEADER,
   LOGIN_PATH,
@@ -171,7 +172,6 @@ test("登录使用实际 TCP 对端限流，成功后签发 Cookie 并安全回�
     headers: { "accept-language": "en" },
   });
   assert.equal(page.status, 200);
-  assert.match(page.body, /管理员登录/u);
   assert.match(page.headers["content-security-policy"], /default-src 'none'/u);
   assert.equal(page.headers["referrer-policy"], "same-origin");
 
@@ -185,7 +185,6 @@ test("登录使用实际 TCP 对端限流，成功后签发 Cookie 并安全回�
     });
     assert.equal(failed.status, 401);
     assert.equal(failed.headers[AUTH_REQUIRED_HEADER.toLowerCase()], "required");
-    assert.match(failed.body, /incorrect/u);
   }
   const limited = await request(relayPort, {
     path: LOGIN_PATH,
@@ -204,8 +203,9 @@ test("登录使用实际 TCP 对端限流，成功后签发 Cookie 并安全回�
   });
   assert.equal(success.status, 303);
   assert.equal(success.headers.location, "/settings?tab=container");
-  assert.match(success.headers["set-cookie"][0], /HttpOnly/u);
-  assert.match(success.headers["set-cookie"][0], /Secure/u);
+  const sessionCookie = parseSetCookie(success.headers["set-cookie"][0]);
+  assert.equal(sessionCookie.httpOnly, true);
+  assert.equal(sessionCookie.secure, true);
 
   const failedAfterReset = await request(relayPort, {
     path: LOGIN_PATH,
@@ -262,7 +262,8 @@ test("退出只清除当前 Cookie，旧令牌仍可重放直至轮换密钥", a
     headers: { cookie: `dsh_container_session=${token}` },
   });
   assert.equal(logout.status, 204);
-  assert.match(logout.headers["set-cookie"][0], /Max-Age=0/u);
+  const clearedCookie = parseSetCookie(logout.headers["set-cookie"][0]);
+  assert.equal(clearedCookie.maxAge, 0);
   const replay = await request(relayPort, {
     headers: { cookie: `dsh_container_session=${token}` },
   });

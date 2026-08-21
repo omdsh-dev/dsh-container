@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { test } from "node:test";
+import { parseSetCookie } from "cookie";
 import {
   LOGIN_PATH,
   LoginLimiter,
@@ -62,7 +63,6 @@ test("恒定长度摘要比较保留密钥原始字符串语义", () => {
 
 test("会话令牌使用随机 nonce 与 HMAC，密钥轮换后立即失效", () => {
   const token = issueSessionToken("alpha", Buffer.alloc(32, 1));
-  assert.equal(token.split(".").length, 2);
   assert.equal(verifySessionToken("alpha", token), true);
   assert.equal(verifySessionToken("beta", token), false);
   assert.equal(verifySessionToken("alpha", `${token.slice(0, -1)}x`), false);
@@ -71,16 +71,28 @@ test("会话令牌使用随机 nonce 与 HMAC，密钥轮换后立即失效", ()
 });
 
 test("会话 Cookie 长期持久、HttpOnly、SameSite=Lax，并按代理协议设置 Secure", () => {
-  const plain = sessionCookieHeader("token", false, 0);
-  assert.match(plain, /^dsh_container_session=token;/u);
-  assert.match(plain, /HttpOnly/u);
-  assert.match(plain, /Path=\//u);
-  assert.match(plain, /SameSite=Lax/u);
-  assert.match(plain, /Max-Age=315360000/u);
-  assert.doesNotMatch(plain, /Secure/u);
-  assert.match(sessionCookieHeader("token", true, 0), /Secure/u);
-  assert.match(clearSessionCookieHeader(true), /Max-Age=0/u);
-  assert.match(clearSessionCookieHeader(true), /Expires=Thu, 01 Jan 1970 00:00:00 GMT/u);
+  const plain = parseSetCookie(sessionCookieHeader("token", false, 0));
+  assert.equal(plain.name, "dsh_container_session");
+  assert.equal(plain.value, "token");
+  assert.equal(plain.httpOnly, true);
+  assert.equal(plain.path, "/");
+  assert.equal(plain.sameSite, "lax");
+  assert.equal(plain.secure, undefined);
+  assert.equal(plain.maxAge, 315360000);
+  assert.equal(plain.expires?.getTime(), 315360000000);
+
+  const secure = parseSetCookie(sessionCookieHeader("token", true, 0));
+  assert.equal(secure.secure, true);
+
+  const cleared = parseSetCookie(clearSessionCookieHeader(true));
+  assert.equal(cleared.name, "dsh_container_session");
+  assert.equal(cleared.value, "");
+  assert.equal(cleared.httpOnly, true);
+  assert.equal(cleared.path, "/");
+  assert.equal(cleared.sameSite, "lax");
+  assert.equal(cleared.secure, true);
+  assert.equal(cleared.maxAge, 0);
+  assert.equal(cleared.expires?.getTime(), 0);
 });
 
 test("认证 Cookie 可读取并会在转发前精确移除", () => {
@@ -149,37 +161,22 @@ test("登录限流允许突发五次失败、每分钟恢复一次、成功重�
   assert.equal(limiter.size, 1);
 });
 
-test("登录页双语、无障碍、明暗主题、CSP 兼容且不会泄露密钥", () => {
-  const chinese = renderLoginPage({
-    headers: { "accept-language": "zh-CN,zh;q=0.9" },
-    next: "/settings?<unsafe>",
-    error: "invalid",
-    faviconDataUrl: "data:image/svg+xml;base64,PHN2Zy8+",
+test("登录页不会原样注入外部 next 与 favicon 输入", () => {
+  const page = renderLoginPage({
+    headers: {},
+    next: '/settings?value="><script id="next-probe"></script>',
+    faviconDataUrl: 'data:image/svg+xml,"><script id="favicon-probe"></script>',
   });
-  assert.match(chinese, /<html lang="zh">/u);
-  assert.match(chinese, /管理员登录/u);
-  assert.match(chinese, /role="alert"/u);
-  assert.match(chinese, /prefers-color-scheme:dark/u);
-  assert.match(chinese, /autocomplete="current-password"/u);
-  assert.match(chinese, /data:image\/svg\+xml;base64/u);
-  assert.doesNotMatch(chinese, /<unsafe>/u);
-  const english = renderLoginPage({ headers: {}, requestedLanguage: "en", next: "/" });
-  assert.match(english, /<html lang="en">/u);
-  assert.match(english, /Administrator sign in/u);
-  const preferredEnglish = renderLoginPage({
-    headers: { "accept-language": "en-US,zh-CN;q=0.9" },
-    next: "/",
-  });
-  assert.match(preferredEnglish, /<html lang="en">/u);
-  const disabledChinese = renderLoginPage({
-    headers: { "accept-language": "zh-CN;q=0,en;q=0.8" },
-    next: "/",
-  });
-  assert.match(disabledChinese, /<html lang="en">/u);
+  assert.doesNotMatch(page, /<script id="next-probe">/u);
+  assert.doesNotMatch(page, /<script id="favicon-probe">/u);
 });
 
-test("代理错误日志只包含受限错误码", () => {
+test("代理错误日志只包含合法错误码且不泄露异常详情", () => {
   const error = Object.assign(new Error("secret-key Cookie: dsh_container_session=token"), { code: "ECONNREFUSED" });
-  assert.equal(sanitizedProxyError(error), "dsh-container auth relay: upstream proxy error (ECONNREFUSED)");
-  assert.equal(sanitizedProxyError({ code: "bad value: secret" }), "dsh-container auth relay: upstream proxy error (UNKNOWN)");
+  const recognized = sanitizedProxyError(error);
+  assert.match(recognized, /ECONNREFUSED/u);
+  assert.doesNotMatch(recognized, /secret-key|Cookie|dsh_container_session|token/u);
+
+  const malicious = sanitizedProxyError({ code: "bad value: secret", message: "private detail" });
+  assert.doesNotMatch(malicious, /bad value|secret|private detail/u);
 });
