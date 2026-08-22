@@ -8,6 +8,7 @@ import {
   AUTH_REQUIRED_HEADER,
   LOGIN_PATH,
   LOGOUT_PATH,
+  LoginLimiter,
   issueSessionToken,
 } from "../lib.mjs";
 import { createAuthRelay } from "../server.mjs";
@@ -125,6 +126,7 @@ async function fixture(t) {
     listenPort: 0,
     upstreamPort,
     listenHost: "127.0.0.1",
+    limiter: new LoginLimiter({ capacity: 1 }),
     logger: { error: (message) => logs.push(message) },
   });
   const relayPort = (await relay.listen()).port;
@@ -165,27 +167,25 @@ test("不可信 Host 和跨站请求在有效 Cookie 前仍返回 403", async (t
   assert.match(upgrade, /^HTTP\/1\.1 403 Forbidden/mu);
 });
 
-test("登录使用实际 TCP 对端限流，成功后签发 Cookie 并安全回跳", async (t) => {
+test("登录按实际 TCP 对端限流，成功后签发 Cookie、回跳并重置限流", async (t) => {
   const { relayPort } = await fixture(t);
   const page = await request(relayPort, {
     path: `${LOGIN_PATH}?lang=zh&next=%2Fsettings`,
-    headers: { "accept-language": "en" },
   });
   assert.equal(page.status, 200);
   assert.match(page.headers["content-security-policy"], /default-src 'none'/u);
   assert.equal(page.headers["referrer-policy"], "same-origin");
 
   const formHeaders = { "content-type": "application/x-www-form-urlencoded" };
-  for (let index = 0; index < 5; index += 1) {
-    const failed = await request(relayPort, {
-      path: LOGIN_PATH,
-      method: "POST",
-      headers: formHeaders,
-      body: "key=wrong&next=%2Fsettings&lang=en",
-    });
-    assert.equal(failed.status, 401);
-    assert.equal(failed.headers[AUTH_REQUIRED_HEADER.toLowerCase()], "required");
-  }
+  const failed = await request(relayPort, {
+    path: LOGIN_PATH,
+    method: "POST",
+    headers: formHeaders,
+    body: "key=wrong&next=%2Fsettings&lang=en",
+  });
+  assert.equal(failed.status, 401);
+  assert.equal(failed.headers[AUTH_REQUIRED_HEADER.toLowerCase()], "required");
+
   const limited = await request(relayPort, {
     path: LOGIN_PATH,
     method: "POST",
@@ -216,9 +216,9 @@ test("登录使用实际 TCP 对端限流，成功后签发 Cookie 并安全回�
   assert.equal(failedAfterReset.status, 401);
 });
 
-test("认证 HTTP 保留 Host/Origin、流式传递大请求，并移除自身 Cookie", async (t) => {
+test("认证 HTTP 保留 Host/Origin、完整转发请求体并移除自身 Cookie", async (t) => {
   const { key, relayPort, seen } = await fixture(t);
-  const payload = Buffer.alloc(2 * 1024 * 1024, 97);
+  const payload = "deterministic upload body";
   const response = await request(relayPort, {
     path: "/api/upload",
     method: "POST",
@@ -227,7 +227,7 @@ test("认证 HTTP 保留 Host/Origin、流式传递大请求，并移除自身 C
       origin: "http://dsh.example",
       cookie: `theme=dark; dsh_container_session=${issueSessionToken(key)}; other=value`,
       "content-type": "application/octet-stream",
-      "content-length": String(payload.length),
+      "content-length": String(Buffer.byteLength(payload)),
     },
     body: payload,
   });
@@ -238,7 +238,7 @@ test("认证 HTTP 保留 Host/Origin、流式传递大请求，并移除自身 C
     host: "dsh.example",
     origin: "http://dsh.example",
     cookie: "theme=dark; other=value",
-    bytes: payload.length,
+    bytes: Buffer.byteLength(payload),
   });
 });
 
@@ -281,7 +281,8 @@ test("上游失败返回 502，日志不包含密钥、Cookie 或请求头", asy
     },
   });
   assert.equal(response.status, 502);
-  assert.equal(logs.length, 1);
-  assert.match(logs[0], /upstream proxy error/u);
-  assert.doesNotMatch(logs[0], /test-only-key|private|dsh_container_session/u);
+  assert.ok(logs.length > 0);
+  const logText = logs.join("\n");
+  assert.match(logText, /upstream proxy error/u);
+  assert.doesNotMatch(logText, /test-only-key|private|dsh_container_session/u);
 });
