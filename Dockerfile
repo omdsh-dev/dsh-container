@@ -17,12 +17,11 @@ RUN pnpm test \
 
 FROM node:24-bookworm-slim
 
-ARG DSH_CONTAINER_DSH_VERSION=latest
-
 ENV DSH_HOME=/home/node/.dsh \
     DSH_PERMISSION_MODE=danger-full-access \
     DSH_TELEMETRY_DISABLED=1 \
-    NODE_USE_ENV_PROXY=1
+    NODE_USE_ENV_PROXY=1 \
+    PATH=/opt/dsh/node_modules/.bin:$PATH
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -43,10 +42,22 @@ RUN apt-get update \
     && corepack enable \
     && corepack install --global pnpm@11.7.0
 
-RUN npm install --global --no-audit --no-fund \
-        --allow-scripts=@deepseek-ai/dsh-subprocess-local,koffi,node-pty,@google/genai,protobufjs \
-        "@deepseek-ai/dsh@${DSH_CONTAINER_DSH_VERSION}" \
-    && npm cache clean --force \
+ARG DSH_CONTAINER_DSH_VERSION=latest
+
+RUN mkdir -p /opt/dsh \
+    && cd /opt/dsh \
+    && pnpm init --bare --no-init-package-manager \
+    && pnpm config set node-linker hoisted --location=project \
+    && dsh_resolved_version="$(pnpm view "@deepseek-ai/dsh@${DSH_CONTAINER_DSH_VERSION}" version --json \
+        | jq -er 'if type == "string" then . else error("expected one resolved DSH version") end')" \
+    && pnpm add --save-exact \
+        --allow-build=@deepseek-ai/dsh-subprocess-local \
+        --allow-build=koffi \
+        --allow-build=node-pty \
+        --allow-build=@google/genai \
+        --allow-build=protobufjs \
+        "@deepseek-ai/dsh@${dsh_resolved_version}" \
+    && pnpm store prune \
     && mkdir -p /home/node/.dsh /workspace \
     && chown -R node:node /home/node /workspace
 
@@ -67,7 +78,7 @@ COPY --chown=root:root \
     docker/random-uuid-polyfill.js \
     /tmp/
 
-RUN node /tmp/patch-dsh.mjs "$(npm root --global)" \
+RUN node /tmp/patch-dsh.mjs /opt/dsh/node_modules \
     && rm -rf \
         /tmp/dsh-container-plugin \
         /tmp/auth-bootstrap.js \

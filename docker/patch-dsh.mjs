@@ -1,14 +1,14 @@
 import { chmod, copyFile, cp, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-const npmRoot = process.argv[2];
-if (!npmRoot) {
-  throw new Error("缺少 npm 全局模块目录参数");
+const moduleRoot = process.argv[2];
+if (!moduleRoot) {
+  throw new Error("缺少模块目录参数");
 }
 
-const dshRoot = path.join(npmRoot, "@deepseek-ai", "dsh");
+const dshRoot = path.join(moduleRoot, "@deepseek-ai", "dsh");
 const dshManifestPath = path.join(dshRoot, "package.json");
-const packageRoot = path.join(dshRoot, "node_modules", "@deepseek-ai");
+const packageRoot = path.join(moduleRoot, "@deepseek-ai");
 const frontendDirectory = path.join(packageRoot, "dsh-web-frontend", "dist");
 const frontendIndex = path.join(frontendDirectory, "index.html");
 const polyfillTarget = path.join(frontendDirectory, "random-uuid-polyfill.js");
@@ -26,7 +26,7 @@ const settingsModelsClient = path.join(
 );
 const webAppPatch = path.join(packageRoot, "dsh-web-app", "cordis.patch.yml");
 const containerPluginSource = "/tmp/dsh-container-plugin";
-const containerPluginTarget = path.join(dshRoot, "node_modules", "dsh-container-plugin");
+const containerPluginTarget = path.join(moduleRoot, "dsh-container-plugin");
 const containerPluginManifest = path.join(containerPluginTarget, "package.json");
 
 function requireExactAnchor(source, anchor, message) {
@@ -137,17 +137,45 @@ await chmod(relayFaviconTarget, 0o644);
 
 const upstreamGuard =
   'if (method !== void 0 && PRIVILEGED_METHODS.has(method) && !isTrustedApiRequest(request, [])) return new Response("forbidden", { status: 403 });';
-const removedGuardMarker =
-  '/* dsh-container: trusted-host validation is the sole API access check. */';
+const privilegedMethodsAnchor = "const PRIVILEGED_METHODS = new Set([";
+const trustedHostPrivilegedMethods = [
+  "settings.describe",
+  "settings.update",
+  "settings.mutate",
+  "credentials.describe",
+  "credentials.set",
+  "credentials.unset",
+  "llm.discoverModels",
+  "agentPreset.read",
+  "agentPreset.copy",
+  "agentPreset.openDocument",
+  "agentPreset.remove",
+];
+const trustedHostPrivilegedMethodsName =
+  "DSH_CONTAINER_TRUSTED_HOST_PRIVILEGED_METHODS";
+const trustedHostPrivilegedMethodsDeclaration =
+  `const ${trustedHostPrivilegedMethodsName} = new Set(${JSON.stringify(trustedHostPrivilegedMethods)});\n`;
+const containerGuard =
+  `if (method !== void 0 && PRIVILEGED_METHODS.has(method) && !isTrustedApiRequest(request, []) && !${trustedHostPrivilegedMethodsName}.has(method)) return new Response("forbidden", { status: 403 });`;
 let serverSource = connectionExtensionSource;
 
-if (!serverSource.includes(removedGuardMarker)) {
-  if (!serverSource.includes(upstreamGuard)) {
-    throw new Error("DSH 权限检查实现已变化，需要复核兼容补丁");
-  }
-  serverSource = serverSource.replace(upstreamGuard, removedGuardMarker);
-  await writeFile(connectionServer, serverSource);
-}
+requireExactAnchor(
+  serverSource,
+  privilegedMethodsAnchor,
+  "DSH 特权方法集合实现已变化，需要复核兼容补丁",
+);
+requireExactAnchor(
+  serverSource,
+  upstreamGuard,
+  "DSH 权限检查实现已变化，需要复核兼容补丁",
+);
+serverSource = serverSource
+  .replace(
+    privilegedMethodsAnchor,
+    `${trustedHostPrivilegedMethodsDeclaration}${privilegedMethodsAnchor}`,
+  )
+  .replace(upstreamGuard, containerGuard);
+await writeFile(connectionServer, serverSource);
 
 const nativePathCapability =
   'return isWsl(internals) || present(env.DISPLAY) || present(env.WAYLAND_DISPLAY);';
