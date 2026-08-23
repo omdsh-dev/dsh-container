@@ -17,11 +17,12 @@ const SESSION_NONCE_BYTES = 32;
 const SESSION_DOMAIN = "dsh-container-session-v1\0";
 const LOGIN_BODY_LIMIT = 16 * 1024;
 const COOKIE_MAX_AGE_SECONDS = 10 * 365 * 24 * 60 * 60;
+// biome-ignore lint/suspicious/noControlCharactersInRegex: Security validation intentionally rejects C0/C1 controls.
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f-\u009f]/u;
 const BASE64URL_32_BYTES = /^[A-Za-z0-9_-]{43}$/u;
 
 function hasOwn(object, key) {
-  return Object.prototype.hasOwnProperty.call(object, key);
+  return Object.hasOwn(object, key);
 }
 
 export function readAuthenticationKey(environment) {
