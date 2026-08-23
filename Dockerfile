@@ -56,7 +56,10 @@ RUN mkdir -p /opt/dsh \
         --allow-build=node-pty \
         --allow-build=@google/genai \
         --allow-build=protobufjs \
+        "react@18.3.1" \
+        "react-dom@18.3.1" \
         "@deepseek-ai/dsh@${dsh_resolved_version}" \
+    && pnpm peers check \
     && pnpm store prune \
     && mkdir -p /home/node/.dsh /workspace \
     && chown -R node:node /home/node /workspace
