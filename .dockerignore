@@ -16,4 +16,3 @@
 !docker/entrypoint.sh
 !docker/healthcheck.mjs
 !docker/patch-dsh.mjs
-!docker/random-uuid-polyfill.js

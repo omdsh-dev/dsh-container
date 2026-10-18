@@ -32,13 +32,15 @@ docker run -d \
   --stop-timeout 20 \
   -p 127.0.0.1:3080:3080 \
   -e "DSH_CONTAINER_TRUSTED_HOSTS=localhost,127.0.0.1" \
-  --tmpfs /tmp:rw,nosuid,nodev,size=512m,mode=1777 \
+  --tmpfs /tmp:rw,exec,nosuid,nodev,size=512m,mode=1777 \
   -v dsh-workspace:/home/node \
   -v dsh-config:/home/node/.dsh \
   ghcr.io/omdsh-dev/dsh-container:latest
 ```
 
 Docker initializes named volumes with the correct ownership.
+
+`/tmp` must allow executable mappings (`exec`): DSH copies its platform prebuilt native addon (`node-addon-require-builtin`) into the temp directory before loading it, and Docker's `--tmpfs` defaults to `noexec`, which fails startup with `No usable prebuilt binary found`. The container checks this condition and reports it explicitly.
 
 To let the Agent work directly in host directories, replace the named volumes with bind mounts:
 
@@ -82,6 +84,17 @@ DSH_CONTAINER_TRUSTED_HOSTS=192.168.1.100,dsh.local
 ```
 
 Separate multiple trusted hosts with commas. Entries can be hostnames, IP addresses, or `host:port`; an entry without a port matches any port for that host. trusted-host is a reachability and same-origin boundary, not authentication.
+
+Entries must be bare authorities (`host` or `host:port`): no scheme, path, trailing slash, `user@`, or whitespace. Since DSH 0.2 validates them while loading and refuses to start otherwise, an invalid entry surfaces as `trustedHosts entry ... is not a bare host[:port] authority` in the container log.
+
+### DSH browser session
+
+DSH 0.2 authenticates its own browser sessions: startup prints a URL carrying a launch token, the browser exchanges it for a signed Cookie, and only then may it load the index, `/api`, and WebSockets. The container hides that step inside the auth relay: the entrypoint copies the `dsh web:` startup line into both the container log and `/tmp/dsh-web.log`, and the relay reads the token from it, exchanges it per browser authority (the `Host` it forwards), and injects the resulting `dsh-auth-*` Cookie. Browsers keep opening `http://<host>:3080` directly and never paste a tokenized URL.
+
+- The token is exchanged inside the container only; it never appears in a page or the container settings page, and the relay never echoes it. Upstream still writes the tokenized startup line to the container log, and whoever can read that log already has container-administrator reach. The relay is the only client holding that session, and every browser in the container shares it.
+- Do not suppress the DSH startup line (the web profile's `printUrl`): the relay waits for it before it starts listening, and exits non-zero when it never arrives, so the container restarts or reports unhealthy.
+- Removing or resetting `.dsh/.credentials.yaml` changes the DSH session signing secret; on an upstream `401` the relay drops its cached exchange and mints a fresh one on the next request.
+- DSH has no method-level loopback tier: once a browser passes the relay's entry checks (the trusted-host fence and, when enabled, the administrator key), it holds the owner session.
 
 ## Administrator key authentication
 
@@ -141,6 +154,7 @@ server {
 | `DSH_CONTAINER_PORT` | `3080` | Port published on the host by Compose. |
 | `DSH_CONTAINER_RELAY_PORT` | `3080` | Internal relay port; normally unchanged. |
 | `DSH_CONTAINER_INTERNAL_PORT` | `3081` | Internal DSH service port; normally unchanged. |
+| `DSH_CONTAINER_STARTUP_LOG` | `/tmp/dsh-web.log` | Temporary file holding the `dsh web:` startup line the relay reads the launch token from; normally unchanged. |
 | `DSH_CONTAINER_IMAGE` | `dsh-container` | Image name built and run by Compose. |
 | `DSH_CONTAINER_DSH_VERSION` | `latest` | DSH npm version or dist-tag installed at build time. |
 | `TZ` | Compose: `Asia/Shanghai` | Container time zone; Docker Run uses the image default when unset. |
@@ -164,6 +178,7 @@ The Web UI adds a read-only **DSH Container** settings page showing the DSH vers
 - The recommended deployment uses a read-only root filesystem, drops all Linux capabilities, enables `no-new-privileges`, and does not mount the Docker socket.
 - Older kernels may not support the Landlock or unprivileged Bubblewrap features required by DSH, so the image uses `DSH_PERMISSION_MODE=danger-full-access` inside the container.
 - The shared administrator key provides no user identity, role authorization, or Agent isolation, and Agents inside the container can read it.
+- The auth relay holds DSH's own browser session (owner identity); without an administrator key, any client that reaches the published port with a trusted Host is that identity.
 - Neither container hardening nor the shared key replaces HTTPS and network access controls. Do not expose the service directly to the public internet; place remote access behind external HTTPS and access policy.
 
 ## Images and updates

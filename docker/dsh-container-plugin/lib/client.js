@@ -8,8 +8,8 @@ window.__ModuleLoader__.load({
     const React = require("react");
     const {
       Button,
-      IconLoadingOutline16,
-      IconRefreshOutline16,
+      IconLoadingOutlineRegular,
+      IconRefreshOutlineRegular,
       Modal,
       RiskConfirmation,
     } = require("@deepseek-ai/dsh-client-ui-primitives");
@@ -267,7 +267,7 @@ window.__ModuleLoader__.load({
         "aria-live": "polite",
       },
       h("span", { "aria-hidden": true },
-        h(IconLoadingOutline16, {
+        h(IconLoadingOutlineRegular, {
           size: 24,
           className: "dcp-restart-spinner",
         })),
@@ -421,7 +421,7 @@ window.__ModuleLoader__.load({
               h(Button, {
                 variant: "outline",
                 className: "dcp-action",
-                icon: logoutBusy ? h(IconLoadingOutline16, {
+                icon: logoutBusy ? h(IconLoadingOutlineRegular, {
                   size: 16,
                   className: "dcp-restart-spinner",
                 }) : undefined,
@@ -439,7 +439,7 @@ window.__ModuleLoader__.load({
             h(Button, {
               variant: "primary",
               className: "dcp-action",
-              icon: h(IconRefreshOutline16, { size: 16 }),
+              icon: h(IconRefreshOutlineRegular, { size: 16 }),
               disabled: busy || logoutBusy,
               onClick: () => {
                 setAcknowledged(false);
@@ -452,6 +452,7 @@ window.__ModuleLoader__.load({
           description: t("confirm.description"),
           acknowledgeLabel: t("confirm.acknowledge"),
           cancelLabel: t("confirm.cancel"),
+          closeLabel: t("confirm.cancel"),
           confirmLabel: t("confirm.restart"),
           acknowledged,
           disabled: busy,

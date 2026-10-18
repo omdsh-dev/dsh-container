@@ -11,13 +11,11 @@ const dshManifestPath = path.join(dshRoot, "package.json");
 const packageRoot = path.join(moduleRoot, "@deepseek-ai");
 const frontendDirectory = path.join(packageRoot, "dsh-web-frontend", "dist");
 const frontendIndex = path.join(frontendDirectory, "index.html");
-const polyfillTarget = path.join(frontendDirectory, "random-uuid-polyfill.js");
 const authBootstrapTarget = path.join(frontendDirectory, "auth-bootstrap.js");
 const faviconSource = path.join(frontendDirectory, "favicon.svg");
 const relayFaviconTarget = "/opt/dsh-container/auth-relay/favicon.svg";
 const connectionServer = path.join(packageRoot, "dsh-client-connection", "lib", "index.js");
-const hostApiProxy = path.join(packageRoot, "dsh-host-apiproxy", "lib", "index.js");
-const settingsClient = path.join(packageRoot, "dsh-client-ui-settings", "lib", "client.js");
+const webServerPackage = path.join(packageRoot, "dsh-host-webserver", "lib", "index.js");
 const settingsModelsClient = path.join(
   packageRoot,
   "dsh-client-ui-settings-models",
@@ -47,18 +45,22 @@ if (
   throw new Error("DSH 安装清单 dependencies 已变化，需要复核插件注入");
 }
 
+// The container plugin's browser half loads through the same module loader and
+// settings slot every first-party browser package uses; assert both contracts
+// so a DSH refactor fails the build instead of shipping a blank settings page.
 const moduleLoaderAnchor = `window.__ModuleLoader__.load({
 \tid: "@deepseek-ai/dsh-client-ui-settings-models",
 \tfactory: (require) => {`;
 const settingsSectionAnchor = `ctx.slots.inject("settings.section", () => ctx.slots.register({
 \t\t\t\tname: "settings.section",
 \t\t\t\tid: "models",`;
-const connectionRpcAnchor =
-  "handle: (channel, handler, options) => this.register(owner, channel, handler, options),";
-const connectionTrustedHostAnchor =
-  'const trustedHosts = options.authority === "loopback" ? [] : this.trustedHosts;';
+// The container plugin's host half owns one web route and asks Connection to
+// admit each request; assert both services expose the entry points it calls.
+const admissionAnchor = "requestRejection(request) {";
+const webRouteAnchor = "register(route) {";
 const settingsExtensionSource = await readFile(settingsModelsClient, "utf8");
 const connectionExtensionSource = await readFile(connectionServer, "utf8");
+const webServerSource = await readFile(webServerPackage, "utf8");
 
 requireExactAnchor(
   settingsExtensionSource,
@@ -72,13 +74,13 @@ requireExactAnchor(
 );
 requireExactAnchor(
   connectionExtensionSource,
-  connectionRpcAnchor,
-  "DSH Connection RPC 扩展点已变化，需要复核容器 RPC channel",
+  admissionAnchor,
+  "DSH Connection 请求放行接口已变化，需要复核容器 RPC channel",
 );
 requireExactAnchor(
-  connectionExtensionSource,
-  connectionTrustedHostAnchor,
-  "DSH Connection RPC 权限模型已变化，需要复核 trusted-host 防护",
+  webServerSource,
+  webRouteAnchor,
+  "DSH Web 路由注册接口已变化，需要复核容器 RPC channel",
 );
 
 await cp(containerPluginSource, containerPluginTarget, {
@@ -115,110 +117,18 @@ if (containerPluginRowCount === 0) {
 }
 
 const moduleTag = '    <script type="module"';
-const polyfillTag = '    <script src="/random-uuid-polyfill.js"></script>\n';
 const authBootstrapTag = '    <script src="/auth-bootstrap.js"></script>\n';
 let html = await readFile(frontendIndex, "utf8");
 
-for (const tag of [polyfillTag, authBootstrapTag]) {
-  if (html.includes(tag)) continue;
+if (!html.includes(authBootstrapTag)) {
   if (!html.includes(moduleTag)) {
     throw new Error("无法定位 DSH 前端模块入口");
   }
-  html = html.replace(moduleTag, `${tag}${moduleTag}`);
+  html = html.replace(moduleTag, `${authBootstrapTag}${moduleTag}`);
+  await writeFile(frontendIndex, html);
 }
-await writeFile(frontendIndex, html);
 
-await copyFile("/tmp/random-uuid-polyfill.js", polyfillTarget);
 await copyFile("/tmp/auth-bootstrap.js", authBootstrapTarget);
 await copyFile(faviconSource, relayFaviconTarget);
-await chmod(polyfillTarget, 0o644);
 await chmod(authBootstrapTarget, 0o644);
 await chmod(relayFaviconTarget, 0o644);
-
-const upstreamGuard =
-  'if (method !== void 0 && PRIVILEGED_METHODS.has(method) && !isTrustedApiRequest(request, [])) return new Response("forbidden", { status: 403 });';
-const privilegedMethodsAnchor = "const PRIVILEGED_METHODS = new Set([";
-const trustedHostPrivilegedMethods = [
-  "settings.describe",
-  "settings.update",
-  "settings.mutate",
-  "credentials.describe",
-  "credentials.set",
-  "credentials.unset",
-  "llm.discoverModels",
-  "agentPreset.read",
-  "agentPreset.copy",
-  "agentPreset.openDocument",
-  "agentPreset.remove",
-];
-const trustedHostPrivilegedMethodsName =
-  "DSH_CONTAINER_TRUSTED_HOST_PRIVILEGED_METHODS";
-const trustedHostPrivilegedMethodsDeclaration =
-  `const ${trustedHostPrivilegedMethodsName} = new Set(${JSON.stringify(trustedHostPrivilegedMethods)});\n`;
-const containerGuard =
-  `if (method !== void 0 && PRIVILEGED_METHODS.has(method) && !isTrustedApiRequest(request, []) && !${trustedHostPrivilegedMethodsName}.has(method)) return new Response("forbidden", { status: 403 });`;
-let serverSource = connectionExtensionSource;
-
-requireExactAnchor(
-  serverSource,
-  privilegedMethodsAnchor,
-  "DSH 特权方法集合实现已变化，需要复核兼容补丁",
-);
-requireExactAnchor(
-  serverSource,
-  upstreamGuard,
-  "DSH 权限检查实现已变化，需要复核兼容补丁",
-);
-serverSource = serverSource
-  .replace(
-    privilegedMethodsAnchor,
-    `${trustedHostPrivilegedMethodsDeclaration}${privilegedMethodsAnchor}`,
-  )
-  .replace(upstreamGuard, containerGuard);
-await writeFile(connectionServer, serverSource);
-
-const nativePathCapability =
-  'return isWsl(internals) || present(env.DISPLAY) || present(env.WAYLAND_DISPLAY);';
-const containerPathCapability =
-  'return false; /* dsh-container: containers have no native desktop opener. */';
-const settingsDocumentCapability =
-  'hasDocument: settings.documentPath !== void 0,';
-const containerSettingsDocumentCapability =
-  'hasDocument: settings.documentPath !== void 0 && canOpenPaths(),';
-let hostSource = await readFile(hostApiProxy, "utf8");
-
-if (!hostSource.includes(containerPathCapability)) {
-  if (!hostSource.includes(nativePathCapability)) {
-    throw new Error("DSH 原生路径打开能力实现已变化，需要复核兼容补丁");
-  }
-  hostSource = hostSource.replace(nativePathCapability, containerPathCapability);
-}
-
-if (!hostSource.includes(containerSettingsDocumentCapability)) {
-  if (!hostSource.includes(settingsDocumentCapability)) {
-    throw new Error("DSH 设置文档能力实现已变化，需要复核兼容补丁");
-  }
-  hostSource = hostSource.replace(
-    settingsDocumentCapability,
-    containerSettingsDocumentCapability,
-  );
-}
-
-await writeFile(hostApiProxy, hostSource);
-
-const loopbackSettingsMode = 'connection.isLoopback ? "host" : "memory"';
-const trustedHostSettingsMode =
-  '"host" /* dsh-container: trusted-host clients persist settings on the Host. */';
-let settingsClientSource = await readFile(settingsClient, "utf8");
-const loopbackSettingsModeCount = settingsClientSource.split(loopbackSettingsMode).length - 1;
-const trustedHostSettingsModeCount = settingsClientSource.split(trustedHostSettingsMode).length - 1;
-
-if (loopbackSettingsModeCount === 2 && trustedHostSettingsModeCount === 0) {
-  settingsClientSource = settingsClientSource.replaceAll(
-    loopbackSettingsMode,
-    trustedHostSettingsMode,
-  );
-  await writeFile(settingsClient, settingsClientSource);
-} else if (loopbackSettingsModeCount !== 0 || trustedHostSettingsModeCount !== 2) {
-  throw new Error("DSH 客户端设置持久化实现已变化，需要复核兼容补丁");
-}

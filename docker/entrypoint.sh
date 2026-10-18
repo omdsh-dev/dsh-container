@@ -5,7 +5,6 @@ set -Eeuo pipefail
 relay_port_value="${DSH_CONTAINER_RELAY_PORT:-3080}"
 app_port_value="${DSH_CONTAINER_INTERNAL_PORT:-3081}"
 trusted_hosts_value="${DSH_CONTAINER_TRUSTED_HOSTS:-}"
-authentication_enabled=0
 
 require_port() {
   local name="$1"
@@ -55,12 +54,44 @@ export DSH_CONTAINER_INTERNAL_PORT="$app_port"
 export DSH_CONTAINER_TRUSTED_HOSTS="$trusted_hosts_csv"
 
 if [[ -v DSH_CONTAINER_KEY ]]; then
-  if node /opt/dsh-container/auth-relay/validate-key.mjs; then
-    authentication_enabled=1
-  else
-    status="$?"
-    exit "$status"
-  fi
+  node /opt/dsh-container/auth-relay/validate-key.mjs || { status="$?"; exit "$status"; }
+fi
+
+startup_log="${DSH_CONTAINER_STARTUP_LOG:-/tmp/dsh-web.log}"
+if ! : > "$startup_log" 2>/dev/null; then
+  printf 'dsh-container: %s must be writable; mount a writable /tmp or set DSH_CONTAINER_STARTUP_LOG\n' "$startup_log" >&2
+  exit 70
+fi
+export DSH_CONTAINER_STARTUP_LOG="$startup_log"
+
+tmp_directory_is_executable() {
+  node --input-type=module -e '
+    import { readFileSync } from "node:fs";
+    import { tmpdir } from "node:os";
+    try {
+      const target = tmpdir();
+      let point = "";
+      let options;
+      for (const line of readFileSync("/proc/self/mountinfo", "utf8").split("\n")) {
+        const fields = line.split(" ");
+        if (fields.length < 6) continue;
+        const mountPoint = fields[4];
+        const covered = mountPoint === "/" || target === mountPoint || target.startsWith(`${mountPoint}/`);
+        if (covered && mountPoint.length >= point.length) {
+          point = mountPoint;
+          options = fields[5];
+        }
+      }
+      process.exit(options !== undefined && options.split(",").includes("noexec") ? 1 : 0);
+    } catch {
+      process.exit(0);
+    }
+  '
+}
+
+if ! tmp_directory_is_executable; then
+  printf 'dsh-container: %s must allow executable mappings (add exec to the tmpfs mount); DSH loads its prebuilt native addon from the temp directory\n' "${TMPDIR:-/tmp}" >&2
+  exit 70
 fi
 
 dsh_entrypoint="$(readlink -f "$(command -v dsh)")"
@@ -114,19 +145,15 @@ trap on_term TERM
 trap on_int INT
 trap on_restart USR1
 
-if (( authentication_enabled )); then
-  node /opt/dsh-container/auth-relay/index.mjs &
-else
-  socat \
-    "TCP-LISTEN:${relay_port},bind=0.0.0.0,reuseaddr,fork" \
-    "TCP:127.0.0.1:${app_port}" &
-fi
+node /opt/dsh-container/auth-relay/index.mjs &
 relay_pid="$!"
 
 node --expose-internals "$dsh_entrypoint" web \
   --host 127.0.0.1 \
   --port "$app_port" \
-  --trusted-host "${trusted_hosts[@]}" &
+  --trusted-host "${trusted_hosts[@]}" \
+  --no-open \
+  > >(tee "$startup_log") 2>&1 &
 dsh_pid="$!"
 
 set +e

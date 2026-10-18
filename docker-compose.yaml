@@ -33,7 +33,7 @@ services:
         source: ./.dsh
         target: /home/node/.dsh
     tmpfs:
-      - /tmp:rw,nosuid,nodev,size=512m,mode=1777
+      - /tmp:rw,exec,nosuid,nodev,size=512m,mode=1777
     stop_grace_period: 20s
     healthcheck:
       test:

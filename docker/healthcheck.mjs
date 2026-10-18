@@ -12,7 +12,9 @@ async function probe(url, options) {
 }
 
 try {
-  const internal = await probe(`http://127.0.0.1:${internalPort}/`);
+  // DSH requires its browser session for the index and the API, so probe a
+  // static asset that proves the HTTP surface is serving the built frontend.
+  const internal = await probe(`http://127.0.0.1:${internalPort}/favicon.svg`);
   if (!internal.ok) throw new Error("internal DSH probe failed");
 
   const external = await probe(`http://127.0.0.1:${relayPort}/`, {

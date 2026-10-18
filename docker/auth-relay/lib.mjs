@@ -11,6 +11,8 @@ export const LOGIN_PATH = `${AUTH_BASE_PATH}/login`;
 export const LOGOUT_PATH = `${AUTH_BASE_PATH}/logout`;
 export const SESSION_COOKIE = "dsh_container_session";
 export const AUTH_REQUIRED_HEADER = "X-DSH-Container-Auth";
+/** Prefix of the DSH Host browser-session cookies the relay completes on behalf of its clients. */
+export const DSH_SESSION_COOKIE_PREFIX = "dsh-auth-";
 
 const MAX_KEY_BYTES = 4096;
 const SESSION_NONCE_BYTES = 32;
@@ -124,14 +126,22 @@ export function sessionFromCookieHeader(header) {
   }
 }
 
-export function withoutSessionCookie(header) {
+function withoutCookieWhere(header, excluded) {
   if (typeof header !== "string") return undefined;
   const filtered = header.split(";").filter((part) => {
     const separator = part.indexOf("=");
-    return separator === -1 || part.slice(0, separator).trim() !== SESSION_COOKIE;
+    return separator === -1 || !excluded(part.slice(0, separator).trim());
   });
   const value = filtered.join(";").trim();
   return value.length === 0 ? undefined : value;
+}
+
+export function withoutSessionCookie(header) {
+  return withoutCookieWhere(header, (name) => name === SESSION_COOKIE);
+}
+
+export function withoutDshSessionCookies(header) {
+  return withoutCookieWhere(header, (name) => name.startsWith(DSH_SESSION_COOKIE_PREFIX));
 }
 
 function headerValue(headers, name) {
@@ -425,4 +435,11 @@ export function sanitizedProxyError(error) {
     ? error.code
     : "UNKNOWN";
   return `dsh-container auth relay: upstream proxy error (${code})`;
+}
+
+export function sanitizedSessionError(error) {
+  const code = typeof error?.code === "string" && /^[A-Z0-9_]+$/u.test(error.code)
+    ? error.code
+    : "UNKNOWN";
+  return `dsh-container auth relay: DSH browser-session exchange failed (${code})`;
 }

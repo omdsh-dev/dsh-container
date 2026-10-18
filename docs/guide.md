@@ -32,13 +32,15 @@ docker run -d \
   --stop-timeout 20 \
   -p 127.0.0.1:3080:3080 \
   -e "DSH_CONTAINER_TRUSTED_HOSTS=localhost,127.0.0.1" \
-  --tmpfs /tmp:rw,nosuid,nodev,size=512m,mode=1777 \
+  --tmpfs /tmp:rw,exec,nosuid,nodev,size=512m,mode=1777 \
   -v dsh-workspace:/home/node \
   -v dsh-config:/home/node/.dsh \
   ghcr.io/omdsh-dev/dsh-container:latest
 ```
 
 Docker 会以正确的属主初始化命名卷。
+
+`/tmp` 必须允许执行映射（`exec`）：DSH 会把平台预编译的原生插件（`node-addon-require-builtin`）复制到临时目录再加载，而 Docker 的 `--tmpfs` 默认带 `noexec`，会导致启动时报 `No usable prebuilt binary found`。容器启动时会检查这一点并给出明确错误。
 
 如需让 Agent 直接操作宿主机目录，可将命名卷替换为绑定挂载：
 
@@ -82,6 +84,17 @@ DSH_CONTAINER_TRUSTED_HOSTS=192.168.1.100,dsh.local
 ```
 
 多个 trusted hosts 使用逗号分隔，可以填写主机名、IP 或 `host:port`。不带端口的值匹配该主机的任意端口。trusted-host 只是可达性和同源边界，不是身份认证。
+
+条目必须是裸 authority（`host` 或 `host:port`）：不要带 `http://`、路径、尾斜杠、`user@` 或空白。DSH 0.2 起会在加载时校验并在不合法时直接拒绝启动，容器日志会显示 `trustedHosts entry ... is not a bare host[:port] authority`。
+
+### DSH 浏览器会话
+
+DSH 0.2 起自带浏览器会话认证：启动后打印一行带 `token` 的地址，浏览器用它换取签名 Cookie，之后索引页、`/api` 与 WebSocket 才可访问。容器把这一步封装在 auth-relay 里：entrypoint 把 `dsh web:` 启动行同时写入容器日志和 `/tmp/dsh-web.log`，relay 读取其中的 token，按浏览器实际使用的 authority（即 `Host`）换取 `dsh-auth-*` Cookie 并注入转发请求。浏览器仍然直接打开 `http://<host>:3080`，不需要手工粘贴带 token 的地址。
+
+- 令牌只在容器内交换，不写入页面或容器设置页；relay 也不会回显它。上游仍会按自身约定把带 token 的启动行写进容器日志，能读取容器日志的人本就等同容器管理员。relay 是唯一持有该会话的客户端，同一容器内的浏览器共享它。
+- 不要关闭 DSH 的启动行输出（Web profile 的 `printUrl`）：relay 启动时等待这一行，等不到就以非零状态退出，容器随之重启或被标记为不健康。
+- 若删除或重置 `.dsh/.credentials.yaml`，DSH 的会话签名密钥会改变；relay 收到 `401` 后自动清除缓存并在下一次请求重新换取。
+- DSH 侧没有按方法区分的 loopback 特权层：只要通过 relay 的入口检查（trusted-host 边界，以及启用时的管理员密钥），浏览器拿到的就是 owner 会话。
 
 ## 管理员密钥认证
 
@@ -141,6 +154,7 @@ server {
 | `DSH_CONTAINER_PORT` | `3080` | Compose 发布到宿主机的端口。 |
 | `DSH_CONTAINER_RELAY_PORT` | `3080` | 容器内中继服务端口，通常无需修改。 |
 | `DSH_CONTAINER_INTERNAL_PORT` | `3081` | 容器内 DSH 服务端口，通常无需修改。 |
+| `DSH_CONTAINER_STARTUP_LOG` | `/tmp/dsh-web.log` | 保存 `dsh web:` 启动行的临时文件，relay 从这里读取 launch token，通常无需修改。 |
 | `DSH_CONTAINER_IMAGE` | `dsh-container` | Compose 构建和运行使用的镜像名。 |
 | `DSH_CONTAINER_DSH_VERSION` | `latest` | 构建时安装的 DSH npm 版本或 dist-tag。 |
 | `TZ` | Compose：`Asia/Shanghai` | 容器时区；直接使用 Docker Run 时沿用镜像默认值。 |
@@ -164,6 +178,7 @@ WebUI 设置中提供只读的「DSH 容器」页面，显示 DSH 版本、端�
 - 推荐部署使用只读根文件系统、删除全部 Linux capabilities、启用 `no-new-privileges`，且不挂载 Docker socket。
 - 较旧内核可能不支持 DSH 所需的 Landlock 或非特权 Bubblewrap，因此镜像在容器内使用 `DSH_PERMISSION_MODE=danger-full-access`。
 - 共享管理员密钥不提供用户身份、角色授权或 Agent 隔离，并且对容器内 Agent 可见。
+- auth-relay 持有 DSH 自身的浏览器会话（owner 身份）；未启用管理员密钥时，能连到发布端口并携带受信 Host 的客户端即等同该身份。
 - 容器加固和共享密钥都不能替代 HTTPS 与网络访问控制。不要直接暴露到公共互联网；远程访问应放在外部 HTTPS 和访问策略之后。
 
 ## 镜像与更新

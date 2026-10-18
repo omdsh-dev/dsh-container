@@ -84,7 +84,8 @@ function websocketHandshake(port, cookie, host = `127.0.0.1:${port}`) {
   });
 }
 
-async function fixture(t) {
+async function fixture(t, { key: keyOption = "test-only-key", respond, session: sessionOptions = {} } = {}) {
+  const key = keyOption === null ? undefined : keyOption;
   const seen = [];
   const upstream = createServer((request, response) => {
     let bytes = 0;
@@ -98,6 +99,10 @@ async function fixture(t) {
         cookie: request.headers.cookie,
         bytes,
       });
+      if (respond !== undefined) {
+        respond(request, response);
+        return;
+      }
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify(seen.at(-1)));
     });
@@ -119,7 +124,14 @@ async function fixture(t) {
   });
   const upstreamPort = await listen(upstream);
   const logs = [];
-  const key = "test-only-key";
+  const invalidations = [];
+  const session = {
+    async cookieFor() {
+      if (sessionOptions.fail === true) throw new Error("no launch token");
+      return sessionOptions.cookie ?? "dsh-auth-test=session";
+    },
+    invalidate(authority) { invalidations.push(authority); },
+  };
   const relay = await createAuthRelay({
     key,
     trustedHosts: ["dsh.example"],
@@ -128,13 +140,14 @@ async function fixture(t) {
     listenHost: "127.0.0.1",
     limiter: new LoginLimiter({ capacity: 1 }),
     logger: { error: (message) => logs.push(message) },
+    session,
   });
   const relayPort = (await relay.listen()).port;
   t.after(async () => {
     await relay.close();
     await close(upstream);
   });
-  return { key, logs, relay, relayPort, seen, upstream };
+  return { invalidations, key, logs, relay, relayPort, seen, upstream };
 }
 
 test("匿名导航重定向，而 API、静态资源和 WebSocket 返回带标记的 401", async (t) => {
@@ -216,7 +229,7 @@ test("登录按实际 TCP 对端限流，成功后签发 Cookie、回跳并重�
   assert.equal(failedAfterReset.status, 401);
 });
 
-test("认证 HTTP 保留 Host/Origin、完整转发请求体并移除自身 Cookie", async (t) => {
+test("认证 HTTP 保留 Host/Origin、完整转发请求体，并替换为 relay 换取的 DSH Cookie", async (t) => {
   const { key, relayPort, seen } = await fixture(t);
   const payload = "deterministic upload body";
   const response = await request(relayPort, {
@@ -225,7 +238,7 @@ test("认证 HTTP 保留 Host/Origin、完整转发请求体并移除自身 Cook
     headers: {
       host: "dsh.example",
       origin: "http://dsh.example",
-      cookie: `theme=dark; dsh_container_session=${issueSessionToken(key)}; other=value`,
+      cookie: `theme=dark; dsh_container_session=${issueSessionToken(key)}; dsh-auth-stale=old; other=value`,
       "content-type": "application/octet-stream",
       "content-length": String(Buffer.byteLength(payload)),
     },
@@ -237,12 +250,12 @@ test("认证 HTTP 保留 Host/Origin、完整转发请求体并移除自身 Cook
     url: "/api/upload",
     host: "dsh.example",
     origin: "http://dsh.example",
-    cookie: "theme=dark; other=value",
+    cookie: "theme=dark; other=value; dsh-auth-test=session",
     bytes: Buffer.byteLength(payload),
   });
 });
 
-test("认证 WebSocket 透传 Upgrade 并移除自身 Cookie", async (t) => {
+test("认证 WebSocket 透传 Upgrade 并携带 relay 换取的 DSH Cookie", async (t) => {
   const { key, relayPort, seen } = await fixture(t);
   const header = await websocketHandshake(
     relayPort,
@@ -250,7 +263,53 @@ test("认证 WebSocket 透传 Upgrade 并移除自身 Cookie", async (t) => {
     "dsh.example",
   );
   assert.match(header, /^HTTP\/1\.1 101 Switching Protocols/mu);
-  assert.deepEqual(seen.at(-1), { upgrade: true, host: "dsh.example", cookie: "theme=dark" });
+  assert.deepEqual(seen.at(-1), {
+    upgrade: true,
+    host: "dsh.example",
+    cookie: "theme=dark; dsh-auth-test=session",
+  });
+});
+
+test("未启用管理员密钥时仍转发并注入 DSH 会话 Cookie", async (t) => {
+  const { relayPort, seen } = await fixture(t, { key: null });
+  const response = await request(relayPort, {
+    path: "/api/agentPresets/list",
+    method: "POST",
+    headers: { host: "dsh.example", cookie: "theme=dark; dsh-auth-stale=old" },
+    body: "{}",
+  });
+  assert.equal(response.status, 200);
+  assert.equal(seen.at(-1).cookie, "theme=dark; dsh-auth-test=session");
+
+  const login = await request(relayPort, { path: LOGIN_PATH, headers: { host: "dsh.example" } });
+  assert.equal(login.body, JSON.stringify(seen.at(-1)));
+
+  const untrusted = await request(relayPort, { headers: { host: "untrusted.invalid" } });
+  assert.equal(untrusted.status, 403);
+});
+
+test("DSH 会话不可用时返回 503 并提示重试", async (t) => {
+  const { key, relayPort } = await fixture(t, { session: { fail: true } });
+  const cookie = `dsh_container_session=${issueSessionToken(key)}`;
+  const response = await request(relayPort, { headers: { cookie } });
+  assert.equal(response.status, 503);
+  assert.equal(response.headers["retry-after"], "2");
+  const upgrade = await websocketHandshake(relayPort, cookie, "dsh.example");
+  assert.match(upgrade, /^HTTP\/1\.1 503 Service Unavailable/mu);
+});
+
+test("上游 401 使该 authority 的 DSH 会话缓存失效", async (t) => {
+  const { invalidations, key, relayPort } = await fixture(t, {
+    respond: (_request, response) => {
+      response.writeHead(401);
+      response.end("unauthorized");
+    },
+  });
+  const response = await request(relayPort, {
+    headers: { host: "dsh.example", cookie: `dsh_container_session=${issueSessionToken(key)}` },
+  });
+  assert.equal(response.status, 401);
+  assert.deepEqual(invalidations, ["dsh.example"]);
 });
 
 test("退出只清除当前 Cookie，旧令牌仍可重放直至轮换密钥", async (t) => {

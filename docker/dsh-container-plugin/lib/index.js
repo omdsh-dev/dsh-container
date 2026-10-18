@@ -3,10 +3,12 @@ import { readFileSync } from "node:fs";
 import z from "@deepseek-ai/schemastery";
 
 export const name = "dsh-container";
-export const inject = ["connection"];
+export const inject = ["connection", "webServer"];
 export const Config = z.object({});
 
 const RPC_CHANNEL = "/dsh-container";
+const ENDPOINT_PATTERN = /^[A-Za-z0-9_$.-]+$/u;
+const REQUEST_BODY_LIMIT = 16 * 1024;
 const RESTART_AFTER_MS = 500;
 const instanceId = randomUUID();
 
@@ -68,42 +70,153 @@ function describeContainer() {
   };
 }
 
+function writeEnvelope(response, status, body) {
+  const payload = JSON.stringify(body);
+  response.writeHead(status, {
+    "content-type": "application/json",
+    "content-length": Buffer.byteLength(payload),
+    "cache-control": "no-store",
+  });
+  response.end(payload);
+}
+
+function writeText(response, status, text) {
+  response.writeHead(status, {
+    "content-type": "text/plain; charset=utf-8",
+    "content-length": Buffer.byteLength(text),
+    "cache-control": "no-store",
+  });
+  response.end(text);
+}
+
+async function readJsonBody(request) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of request) {
+    size += chunk.length;
+    if (size > REQUEST_BODY_LIMIT) return undefined;
+    chunks.push(chunk);
+  }
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+function endpointOf(pathname) {
+  const prefix = `${RPC_CHANNEL}/`;
+  if (!pathname.startsWith(prefix)) return undefined;
+  const endpoint = pathname.slice(prefix.length);
+  return ENDPOINT_PATTERN.test(endpoint) ? endpoint : undefined;
+}
+
 export function apply(ctx) {
   let restartScheduled = false;
 
-  ctx.connection.rpc.handle(
-    RPC_CHANNEL,
-    async (endpoint, payload) => {
-      if (!isEmptyObject(payload)) {
-        return badRequest(`${endpoint} accepts only an empty object`);
-      }
+  const dispatch = async (endpoint, payload) => {
+    if (!isEmptyObject(payload)) {
+      return badRequest(`${endpoint} accepts only an empty object`);
+    }
 
-      if (endpoint === "describe") {
-        return { ok: true, value: describeContainer() };
-      }
+    if (endpoint === "describe") {
+      return { ok: true, value: describeContainer() };
+    }
 
-      if (endpoint !== "restart") {
-        return badRequest(`unknown dsh-container endpoint: ${endpoint}`);
-      }
+    if (endpoint !== "restart") {
+      return badRequest(`unknown dsh-container endpoint: ${endpoint}`);
+    }
 
-      if (!restartScheduled) {
-        restartScheduled = true;
-        setTimeout(() => {
-          try {
-            process.kill(process.ppid, "SIGUSR1");
-          } catch (error) {
-            ctx.logger.error(
-              error instanceof Error ? error : new Error(String(error)),
-            );
-          }
-        }, RESTART_AFTER_MS);
-      }
+    if (!restartScheduled) {
+      restartScheduled = true;
+      setTimeout(() => {
+        try {
+          process.kill(process.ppid, "SIGUSR1");
+        } catch (error) {
+          ctx.logger.error(
+            error instanceof Error ? error : new Error(String(error)),
+          );
+        }
+      }, RESTART_AFTER_MS);
+    }
 
-      return {
-        ok: true,
-        value: { accepted: true, instanceId, restartAfterMs: RESTART_AFTER_MS },
-      };
-    },
-    { authority: "trusted-host" },
+    return {
+      ok: true,
+      value: { accepted: true, instanceId, restartAfterMs: RESTART_AFTER_MS },
+    };
+  };
+
+  const channel = async (request, response) => {
+    // Same fence and browser-session gate the Host applies to its own /api
+    // route; DSH 0.2 no longer exposes a per-channel registration hook, so the
+    // plugin owns the route and asks Connection to admit the request.
+    const rejection = ctx.connection.requestRejection(request);
+    if (rejection !== undefined) {
+      writeText(response, rejection, rejection === 401 ? "unauthorized" : "forbidden");
+      return;
+    }
+
+    const url = new URL(request.url ?? "/", "http://dsh-container.invalid");
+    const endpoint = endpointOf(url.pathname);
+    if (request.method !== "POST" || endpoint === undefined) {
+      writeText(response, 404, "not found");
+      return;
+    }
+    const contentType = (request.headers["content-type"] ?? "")
+      .split(";", 1)[0]
+      ?.trim()
+      .toLowerCase();
+    if (contentType !== "application/json") {
+      writeText(response, 415, "content type must be application/json");
+      return;
+    }
+
+    const body = await readJsonBody(request);
+    if (body === undefined) {
+      writeText(response, 400, "body is not a bounded JSON document");
+      return;
+    }
+    if (body === null
+      || typeof body !== "object"
+      || body.type !== "client-request"
+      || typeof body.rpcId !== "string"
+      || typeof body.method !== "string") {
+      writeText(response, 400, "body is not a client-request envelope");
+      return;
+    }
+
+    if (body.method !== endpoint) {
+      writeEnvelope(response, 200, {
+        type: "server-response",
+        rpcId: body.rpcId,
+        result: badRequest(
+          `method ${JSON.stringify(body.method)} does not match endpoint ${JSON.stringify(endpoint)}`,
+        ),
+      });
+      return;
+    }
+
+    writeEnvelope(response, 200, {
+      type: "server-response",
+      rpcId: body.rpcId,
+      result: await dispatch(endpoint, body.payload),
+    });
+  };
+
+  ctx.effect(
+    () => ctx.webServer.register({
+      kind: "prefix",
+      path: RPC_CHANNEL,
+      handler: (request, response) => {
+        void channel(request, response).catch((error) => {
+          ctx.logger.error(
+            error instanceof Error ? error : new Error(String(error)),
+          );
+          if (response.headersSent) response.destroy();
+          else writeText(response, 500, "internal server error");
+        });
+      },
+    }),
+    "dsh-container: rpc channel",
   );
 }

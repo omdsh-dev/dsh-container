@@ -9,7 +9,7 @@ COPY docker/auth-relay/package.json docker/auth-relay/pnpm-lock.yaml ./
 
 RUN pnpm install --frozen-lockfile
 
-COPY docker/auth-relay/lib.mjs docker/auth-relay/server.mjs ./
+COPY docker/auth-relay/launch-token.mjs docker/auth-relay/lib.mjs docker/auth-relay/server.mjs docker/auth-relay/session.mjs ./
 COPY docker/auth-relay/test ./test
 
 RUN pnpm test \
@@ -36,7 +36,6 @@ RUN apt-get update \
         openssh-client \
         python3 \
         ripgrep \
-        socat \
     && rm -rf /var/lib/apt/lists/* \
     && ln -s /usr/bin/fdfind /usr/local/bin/fd \
     && corepack enable \
@@ -70,23 +69,23 @@ COPY --from=auth-relay-build --chown=root:root /build/node_modules /opt/dsh-cont
 COPY --chown=root:root \
     docker/auth-relay/package.json \
     docker/auth-relay/index.mjs \
+    docker/auth-relay/launch-token.mjs \
     docker/auth-relay/lib.mjs \
     docker/auth-relay/server.mjs \
+    docker/auth-relay/session.mjs \
     docker/auth-relay/validate-key.mjs \
     /opt/dsh-container/auth-relay/
 
 COPY --chown=root:root \
     docker/auth-bootstrap.js \
     docker/patch-dsh.mjs \
-    docker/random-uuid-polyfill.js \
     /tmp/
 
 RUN node /tmp/patch-dsh.mjs /opt/dsh/node_modules \
     && rm -rf \
         /tmp/dsh-container-plugin \
         /tmp/auth-bootstrap.js \
-        /tmp/patch-dsh.mjs \
-        /tmp/random-uuid-polyfill.js
+        /tmp/patch-dsh.mjs
 
 COPY --chown=root:root \
     docker/entrypoint.sh \

@@ -17,9 +17,11 @@ import {
   renderLoginPage,
   safeReturnPath,
   sanitizedProxyError,
+  sanitizedSessionError,
   sessionCookieHeader,
   sessionFromCookieHeader,
   verifySessionToken,
+  withoutDshSessionCookies,
   withoutSessionCookie,
 } from "./lib.mjs";
 
@@ -50,14 +52,19 @@ function peerOf(request) {
   return request.socket.remoteAddress ?? "unknown";
 }
 
-function removeRelayCookie(request) {
-  const filtered = withoutSessionCookie(request.headers.cookie);
-  if (filtered === undefined) delete request.headers.cookie;
-  else request.headers.cookie = filtered;
-}
-
 function validSession(request, key) {
   return verifySessionToken(key, sessionFromCookieHeader(request.headers.cookie));
+}
+
+/**
+ * Drop the relay's own login cookie and any stale DSH browser-session cookie
+ * carried by the client, then attach the pair the relay exchanged for it.
+ * @param {import("node:http").IncomingMessage} request - request about to be proxied.
+ * @param {string} cookie - DSH browser-session cookie pair.
+ */
+function applyProxyCookie(request, cookie) {
+  const remaining = withoutDshSessionCookies(withoutSessionCookie(request.headers.cookie));
+  request.headers.cookie = remaining === undefined ? cookie : `${remaining}; ${cookie}`;
 }
 
 async function loadFaviconDataUrl(path) {
@@ -79,9 +86,11 @@ export async function createAuthRelay({
   limiter = new LoginLimiter(),
   logger = console,
   faviconPath,
+  session,
 }) {
-  const verifyKey = createKeyVerifier(key);
-  const faviconDataUrl = await loadFaviconDataUrl(faviconPath);
+  const authenticationEnabled = key !== undefined;
+  const verifyKey = authenticationEnabled ? createKeyVerifier(key) : undefined;
+  const faviconDataUrl = authenticationEnabled ? await loadFaviconDataUrl(faviconPath) : undefined;
   const target = `http://127.0.0.1:${upstreamPort}`;
   const proxy = httpProxy.createProxyServer({ target, ws: true, changeOrigin: false, xfwd: false });
   const acceptedSockets = new Set();
@@ -92,8 +101,11 @@ export async function createAuthRelay({
     socket.once("close", () => { upstreamWebSockets.delete(socket); });
   });
 
+  proxy.on("proxyRes", (proxyResponse, request) => {
+    if (proxyResponse.statusCode === 401) session.invalidate(request.headers.host ?? "");
+  });
+
   const proxyHttp = (request, response) => {
-    removeRelayCookie(request);
     proxy.web(request, response, {}, (error) => {
       logger.error(sanitizedProxyError(error));
       if (!response.headersSent) writeText(response, 502, "bad gateway");
@@ -114,7 +126,7 @@ export async function createAuthRelay({
         writeText(response, 400, "bad request", noStoreHeaders());
         return;
       }
-      if (url.pathname === LOGIN_PATH) {
+      if (authenticationEnabled && url.pathname === LOGIN_PATH) {
         if (request.method === "GET" || request.method === "HEAD") {
           const options = {
             headers: request.headers,
@@ -173,7 +185,7 @@ export async function createAuthRelay({
         });
         return;
       }
-      if (url.pathname === LOGOUT_PATH) {
+      if (authenticationEnabled && url.pathname === LOGOUT_PATH) {
         if (request.method !== "POST") {
           writeText(response, 405, "method not allowed", noStoreHeaders({ Allow: "POST" }));
           return;
@@ -184,7 +196,7 @@ export async function createAuthRelay({
         response.end();
         return;
       }
-      if (!validSession(request, key)) {
+      if (authenticationEnabled && !validSession(request, key)) {
         if (isTopLevelHtmlNavigation(request, url.pathname)) {
           const query = new URLSearchParams({ next: safeReturnPath(request.url ?? "/") });
           response.writeHead(303, noStoreHeaders({ Location: `${LOGIN_PATH}?${query}` }));
@@ -196,6 +208,15 @@ export async function createAuthRelay({
         }
         return;
       }
+      let cookie;
+      try {
+        cookie = await session.cookieFor(request.headers.host ?? "");
+      } catch (error) {
+        logger.error(sanitizedSessionError(error));
+        writeText(response, 503, "DSH session unavailable", noStoreHeaders({ "Retry-After": "2" }));
+        return;
+      }
+      applyProxyCookie(request, cookie);
       proxyHttp(request, response);
     } catch (error) {
       logger.error(sanitizedProxyError(error));
@@ -208,16 +229,22 @@ export async function createAuthRelay({
     socket.once("close", () => { acceptedSockets.delete(socket); });
   });
 
-  server.on("upgrade", (request, socket, head) => {
+  server.on("upgrade", async (request, socket, head) => {
     if (!isTrustedRequest(request.headers, trustedHosts)) {
       socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
       return;
     }
-    if (!validSession(request, key)) {
+    if (authenticationEnabled && !validSession(request, key)) {
       socket.end(`HTTP/1.1 401 Unauthorized\r\n${AUTH_REQUIRED_HEADER}: required\r\nConnection: close\r\n\r\n`);
       return;
     }
-    removeRelayCookie(request);
+    try {
+      applyProxyCookie(request, await session.cookieFor(request.headers.host ?? ""));
+    } catch (error) {
+      logger.error(sanitizedSessionError(error));
+      socket.end("HTTP/1.1 503 Service Unavailable\r\nRetry-After: 2\r\nConnection: close\r\n\r\n");
+      return;
+    }
     proxy.ws(request, socket, head, {}, (error) => {
       logger.error(sanitizedProxyError(error));
       if (!socket.destroyed) socket.destroy();
