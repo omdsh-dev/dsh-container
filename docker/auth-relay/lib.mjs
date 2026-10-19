@@ -22,6 +22,7 @@ const COOKIE_MAX_AGE_SECONDS = 10 * 365 * 24 * 60 * 60;
 // biome-ignore lint/suspicious/noControlCharactersInRegex: Security validation intentionally rejects C0/C1 controls.
 const CONTROL_CHARACTER = /[\u0000-\u001f\u007f-\u009f]/u;
 const BASE64URL_32_BYTES = /^[A-Za-z0-9_-]{43}$/u;
+const ASCII_WHITESPACE_OR_CONTROL = /[\u0000-\u0020\u007f]/u;
 
 function hasOwn(object, key) {
   return Object.hasOwn(object, key);
@@ -173,6 +174,41 @@ export function parseTrustedHosts(value) {
   if (entries.length === 0) throw new Error("DSH_CONTAINER_TRUSTED_HOSTS must not be empty");
   for (const entry of entries) assertTrustedAuthority(entry);
   return entries;
+}
+
+/**
+ * Normalize the advertised public URL to the origin root DSH prints and
+ * advertises. The relay serves absolute root paths, so a mount prefix would
+ * break its login flow; credentials, query, and fragment have no meaning here.
+ * @param {string} value - raw DSH_CONTAINER_PUBLIC_URL value.
+ * @returns {string} normalized http(s) origin ending in `/`.
+ */
+export function parsePublicUrl(value) {
+  if (typeof value !== "string" || ASCII_WHITESPACE_OR_CONTROL.test(value)) {
+    throw new Error("must not contain ASCII whitespace or control characters");
+  }
+  const scheme = /^(https?):\/\//iu.exec(value);
+  if (scheme === null) throw new Error("must be an absolute http or https URL");
+  if (value.includes("?") || value.includes("#")) {
+    throw new Error("must not include a query or fragment");
+  }
+  const authority = value.slice(scheme[0].length).split(/[/\\]/, 1)[0];
+  if (authority === "" || authority.includes("@")) {
+    throw new Error("must name one host without credentials");
+  }
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("must be an absolute http or https URL");
+  }
+  if (url.username !== "" || url.password !== "" || url.search !== "" || url.hash !== "") {
+    throw new Error("must not include credentials, a query, or a fragment");
+  }
+  if (url.pathname !== "/") {
+    throw new Error("must be the site root; mount prefixes are not supported");
+  }
+  return url.href;
 }
 
 function isLoopbackHostname(hostname) {

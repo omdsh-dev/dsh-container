@@ -74,6 +74,7 @@ COPY --chown=root:root \
     docker/auth-relay/server.mjs \
     docker/auth-relay/session.mjs \
     docker/auth-relay/validate-key.mjs \
+    docker/auth-relay/validate-public-url.mjs \
     /opt/dsh-container/auth-relay/
 
 COPY --chown=root:root \

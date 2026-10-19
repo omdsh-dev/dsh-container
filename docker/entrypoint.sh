@@ -23,6 +23,26 @@ trim() {
   printf '%s' "$value"
 }
 
+is_loopback_authority() {
+  local entry="${1,,}"
+  local host
+
+  if [[ "$entry" == \[* ]]; then
+    host="${entry#\[}"
+    host="[${host%%]*}]"
+  elif [[ "$entry" == *:* ]]; then
+    host="${entry%%:*}"
+  else
+    host="$entry"
+  fi
+
+  case "$host" in
+    localhost|"[::1]"|"::1") return 0 ;;
+    127.*) [[ "$host" =~ ^127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] ;;
+    *) return 1 ;;
+  esac
+}
+
 require_port DSH_CONTAINER_RELAY_PORT "$relay_port_value"
 require_port DSH_CONTAINER_INTERNAL_PORT "$app_port_value"
 
@@ -55,6 +75,29 @@ export DSH_CONTAINER_TRUSTED_HOSTS="$trusted_hosts_csv"
 
 if [[ -v DSH_CONTAINER_KEY ]]; then
   node /opt/dsh-container/auth-relay/validate-key.mjs || { status="$?"; exit "$status"; }
+fi
+
+public_url_value="${DSH_CONTAINER_PUBLIC_URL:-}"
+public_url=''
+if [[ -n "$public_url_value" ]]; then
+  if ! public_url="$(node /opt/dsh-container/auth-relay/validate-public-url.mjs "$public_url_value")"; then
+    exit 64
+  fi
+fi
+
+if [[ ! -v DSH_CONTAINER_KEY ]]; then
+  has_remote_trusted_host=0
+  for trusted_host in "${trusted_hosts[@]}"; do
+    if ! is_loopback_authority "$trusted_host"; then
+      has_remote_trusted_host=1
+      break
+    fi
+  done
+  if (( has_remote_trusted_host )); then
+    printf 'dsh-container: WARNING: DSH_CONTAINER_KEY is not set and DSH_CONTAINER_TRUSTED_HOSTS accepts non-loopback authorities; every client that can reach the published port acts as the DSH owner. Set DSH_CONTAINER_KEY before exposing this port beyond localhost.\n' >&2
+  else
+    printf 'dsh-container: WARNING: DSH_CONTAINER_KEY is not set; clients that can reach the published port act as the DSH owner.\n' >&2
+  fi
 fi
 
 startup_log="${DSH_CONTAINER_STARTUP_LOG:-/tmp/dsh-web.log}"
@@ -148,11 +191,18 @@ trap on_restart USR1
 node /opt/dsh-container/auth-relay/index.mjs &
 relay_pid="$!"
 
-node --expose-internals "$dsh_entrypoint" web \
-  --host 127.0.0.1 \
-  --port "$app_port" \
-  --trusted-host "${trusted_hosts[@]}" \
-  --no-open \
+dsh_arguments=(
+  web
+  --host 127.0.0.1
+  --port "$app_port"
+  --trusted-host "${trusted_hosts[@]}"
+  --no-open
+)
+if [[ -n "$public_url" ]]; then
+  dsh_arguments+=(--public-url "$public_url")
+fi
+
+node --expose-internals "$dsh_entrypoint" "${dsh_arguments[@]}" \
   > >(tee "$startup_log") 2>&1 &
 dsh_pid="$!"
 

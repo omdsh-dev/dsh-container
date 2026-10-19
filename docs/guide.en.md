@@ -5,7 +5,7 @@ English | [简体中文](guide.md)
 This guide covers persistent deployment, LAN access, configuration, Web UI management, security boundaries, and updates. See the [project home](../README.en.md) for an overview and the shortest startup commands.
 
 > [!WARNING]
-> **Do not expose this service directly to the public internet.** The optional shared key is intended for a trusted LAN or a single-administrator deployment already behind external HTTPS and access policy. It does not provide accounts, roles, data isolation, or public-internet hardening. An authenticated client can change settings and credentials and run Agent commands in the container.
+> **Do not expose this service directly to the public internet.** Set the shared key for LAN, reverse-proxy, or any non-local access; without it, any client that can reach the published port is treated as the owner by the auth relay. The shared key is intended for a trusted LAN or a single-administrator deployment already behind external HTTPS and access policy. It does not provide accounts, roles, data isolation, or public-internet hardening. An authenticated client can change settings and credentials and run Agent commands in the container.
 
 ## Run with Docker
 
@@ -71,21 +71,32 @@ Compose enables persistent bind mounts, a read-only root filesystem, `no-new-pri
 
 ## LAN access
 
-All examples bind to `127.0.0.1` by default. To connect from another device on the LAN, expose the listening address and configure every trusted Host at the same time:
+All examples bind to `127.0.0.1` by default. To connect from another device on the LAN, expose the listening address, configure every trusted Host, and set the administrator key at the same time:
 
-- Docker Run: change the port mapping to `-p 3080:3080` and set `DSH_CONTAINER_TRUSTED_HOSTS` to every hostname or IP used in the browser.
-- Docker Compose: set `DSH_CONTAINER_BIND_ADDRESS` to `0.0.0.0` in `.env` and update `DSH_CONTAINER_TRUSTED_HOSTS`.
+- Docker Run: change the port mapping to `-p 3080:3080`, set `DSH_CONTAINER_TRUSTED_HOSTS` to every hostname or IP used in the browser, and set `DSH_CONTAINER_KEY`.
+- Docker Compose: set `DSH_CONTAINER_BIND_ADDRESS` to `0.0.0.0` in `.env`, update `DSH_CONTAINER_TRUSTED_HOSTS`, and set `DSH_CONTAINER_KEY`.
 
 Example:
 
 ```dotenv
 DSH_CONTAINER_BIND_ADDRESS=0.0.0.0
 DSH_CONTAINER_TRUSTED_HOSTS=192.168.1.100,dsh.local
+DSH_CONTAINER_KEY=replace-with-a-private-key
 ```
 
-Separate multiple trusted hosts with commas. Entries can be hostnames, IP addresses, or `host:port`; an entry without a port matches any port for that host. trusted-host is a reachability and same-origin boundary, not authentication.
+Separate multiple trusted hosts with commas. Entries can be hostnames, IP addresses, or `host:port`; an entry without a port matches any port for that host. trusted-host is a same-origin and DNS-rebinding boundary, not a reachability control or authentication: both the relay and DSH accept loopback authorities, so a non-browser client can pass the check with `Host: localhost`. The actual entry control is `DSH_CONTAINER_KEY`.
 
 Entries must be bare authorities (`host` or `host:port`): no scheme, path, trailing slash, `user@`, or whitespace. Since DSH 0.2 validates them while loading and refuses to start otherwise, an invalid entry surfaces as `trustedHosts entry ... is not a bare host[:port] authority` in the container log.
+
+### Advertised public URL
+
+DSH inside the container listens on `127.0.0.1` only, so its default advertised address is `http://127.0.0.1:3081/` — unreachable from a browser and wrong in the agent's runtime context. Set `DSH_CONTAINER_PUBLIC_URL` and the entrypoint passes it to DSH as `--public-url`:
+
+```dotenv
+DSH_CONTAINER_PUBLIC_URL=https://dsh.example.com
+```
+
+The value feeds DSH's startup URL, `DSH_WEB_URL`, and the agent's runtime context, but **grants no trust**: the browser-facing authority must still appear in `DSH_CONTAINER_TRUSTED_HOSTS`. Only an origin root is accepted (scheme, host, port); mount prefixes, credentials, query strings, and fragments are rejected. The container does not support mounting the Web UI under a subpath such as `/ui/`.
 
 ### DSH browser session
 
@@ -94,7 +105,7 @@ DSH 0.2 authenticates its own browser sessions: startup prints a URL carrying a 
 - The token is exchanged inside the container only; it never appears in a page or the container settings page, and the relay never echoes it. Upstream still writes the tokenized startup line to the container log, and whoever can read that log already has container-administrator reach. The relay is the only client holding that session, and every browser in the container shares it.
 - Do not suppress the DSH startup line (the web profile's `printUrl`): the relay waits for it before it starts listening, and exits non-zero when it never arrives, so the container restarts or reports unhealthy.
 - Removing or resetting `.dsh/.credentials.yaml` changes the DSH session signing secret; on an upstream `401` the relay drops its cached exchange and mints a fresh one on the next request.
-- DSH has no method-level loopback tier: once a browser passes the relay's entry checks (the trusted-host fence and, when enabled, the administrator key), it holds the owner session.
+- DSH has no method-level loopback tier: once a browser passes the relay's entry checks (the administrator key when enabled; trusted-host only filters same-origin/DNS-rebinding requests), it holds the owner session.
 
 ## Administrator key authentication
 
@@ -104,7 +115,7 @@ Add `-e "DSH_CONTAINER_KEY=your-private-key"` to Docker Run, or set the variable
 DSH_CONTAINER_KEY=replace-with-a-private-key
 ```
 
-Leaving the variable undefined preserves the existing unauthenticated behavior. Defining it as empty, whitespace-only, containing control characters, or longer than 4096 UTF-8 bytes makes the container exit with a configuration error. Every other value is compared as the original string: surrounding spaces are not removed and there is no minimum-strength rule. When enabled, every page, static asset, API, and WebSocket outside the login and logout endpoints requires authentication. An untrusted Host, cross-site Fetch Metadata, or mismatched Origin returns `403` before Cookie validation, so a valid Cookie cannot bypass those checks.
+Leaving the variable undefined preserves the existing unauthenticated behavior: any client that reaches the published port is admitted as the owner, so set the variable for LAN, reverse-proxy, or any non-local access. Defining it as empty, whitespace-only, containing control characters, or longer than 4096 UTF-8 bytes makes the container exit with a configuration error. Every other value is compared as the original string: surrounding spaces are not removed and there is no minimum-strength rule. When enabled, every page, static asset, API, and WebSocket outside the login and logout endpoints requires authentication. An untrusted Host, cross-site Fetch Metadata, or mismatched Origin returns `403` before Cookie validation, so a valid Cookie cannot bypass those checks.
 
 The login page selects Simplified Chinese or English from `Accept-Language` and also offers an explicit switch. A successful login writes a long-lived `dsh_container_session` Cookie with `HttpOnly`, `Path=/`, and `SameSite=Lax`. Its token contains a random nonce and an HMAC-SHA256 signature and has no server-side expiry. Browsers can still shorten its lifetime or evict it. A container restart preserves validity; rotating `DSH_CONTAINER_KEY` immediately invalidates old Cookies.
 
@@ -144,12 +155,15 @@ server {
 
 `DSH_CONTAINER_TRUSTED_HOSTS` must include the browser-facing `dsh.example.com`. If the proxy does not overwrite the protocol header, a direct client can spoof it and make the browser receive a `Secure` Cookie that plain HTTP cannot send. If the proxy does not forward the correct Host and Origin, requests return `403` by design.
 
+The container supports serving the Web UI at the site root only. Do not mount it under a prefix such as `/ui/` through a reverse proxy: the relay's login/logout paths, Cookie `Path`, and redirects are absolute root paths, and a prefix breaks the login flow. Subpath deployment requires changing the relay first.
+
 ## Configuration
 
 | Variable | Default | Use |
 |---|---|---|
 | `DSH_CONTAINER_TRUSTED_HOSTS` | required | Hostnames, IP addresses, or `host:port` values accepted by DSH. |
-| `DSH_CONTAINER_KEY` | unset | Optional shared administrator key; enables Cookie authentication for the whole entry point. |
+| `DSH_CONTAINER_KEY` | unset | Optional shared administrator key; enables Cookie authentication for the whole entry point. Set it for LAN, reverse-proxy, or any non-local access. |
+| `DSH_CONTAINER_PUBLIC_URL` | unset | Public origin browsers use; feeds the startup URL, `DSH_WEB_URL`, and the agent runtime context. Only an origin root is accepted. |
 | `DSH_CONTAINER_BIND_ADDRESS` | `127.0.0.1` | Host address used by the Compose port mapping. |
 | `DSH_CONTAINER_PORT` | `3080` | Port published on the host by Compose. |
 | `DSH_CONTAINER_RELAY_PORT` | `3080` | Internal relay port; normally unchanged. |
@@ -178,7 +192,7 @@ The Web UI adds a read-only **DSH Container** settings page showing the DSH vers
 - The recommended deployment uses a read-only root filesystem, drops all Linux capabilities, enables `no-new-privileges`, and does not mount the Docker socket.
 - Older kernels may not support the Landlock or unprivileged Bubblewrap features required by DSH, so the image uses `DSH_PERMISSION_MODE=danger-full-access` inside the container.
 - The shared administrator key provides no user identity, role authorization, or Agent isolation, and Agents inside the container can read it.
-- The auth relay holds DSH's own browser session (owner identity); without an administrator key, any client that reaches the published port with a trusted Host is that identity.
+- The auth relay holds DSH's own browser session (owner identity); without an administrator key, any client that reaches the published port is that identity (a `Host: localhost` request passes the trusted-host check). Set `DSH_CONTAINER_KEY` for LAN, reverse-proxy, or any non-local access.
 - Neither container hardening nor the shared key replaces HTTPS and network access controls. Do not expose the service directly to the public internet; place remote access behind external HTTPS and access policy.
 
 ## Images and updates

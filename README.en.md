@@ -17,7 +17,7 @@ English | [简体中文](README.md)
 ![DSH Container administrator sign-in](docs/login.en.png)
 
 > [!WARNING]
-> **Do not expose this service directly to the public internet.** The optional shared key is intended only for a trusted LAN or a single-administrator deployment behind external HTTPS and access policy. It does not replace TLS, multi-user authorization, or public access controls. trusted-host is not authentication.
+> **Do not expose this service directly to the public internet.** Set `DSH_CONTAINER_KEY` for LAN, reverse-proxy, or any non-local access; without it, any client that can reach the published port is admitted as the owner. The shared key is intended only for a trusted LAN or a single-administrator deployment behind external HTTPS and access policy. It does not replace TLS, multi-user authorization, or public access controls, and trusted-host is not authentication.
 
 ## Quick start
 
@@ -29,7 +29,7 @@ docker run -d --name dsh-container --restart unless-stopped -p 127.0.0.1:3080:30
 
 Open <http://localhost:3080> after the health check passes. This command is for a disposable trial: settings and workspace data are lost when the container is removed.
 
-Add `-e "DSH_CONTAINER_KEY=your-private-key"` to enable single-administrator authentication. See the [guide](docs/guide.en.md#administrator-key-authentication) for key validation, cookie behavior, and reverse-proxy requirements.
+For LAN or reverse-proxy access, add `-e "DSH_CONTAINER_KEY=your-private-key"` to enable single-administrator authentication first. See the [guide](docs/guide.en.md) for key validation, cookie behavior, the advertised public URL, and reverse-proxy requirements.
 
 ### Docker Compose
 

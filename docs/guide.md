@@ -5,7 +5,7 @@
 本指南介绍 dsh-container 的持久化部署、局域网访问、配置、WebUI 管理、安全边界和更新方法。项目概览与最短启动命令见[项目首页](../README.md)。
 
 > [!WARNING]
-> **请勿将本服务直接暴露到公网。** 可选共享密钥适用于可信局域网，或已有外部 HTTPS 和访问策略的单管理员场景；它不提供多账号、角色、数据隔离或公共互联网加固。通过认证的客户端可以修改设置与凭据，并驱动 Agent 在容器内执行命令。
+> **请勿将本服务直接暴露到公网。** 局域网、反向代理或任何非本机访问场景应先设置共享密钥；未设置时，任何能连到发布端口的客户端都会被 auth-relay 视为 owner。共享密钥适用于可信局域网，或已有外部 HTTPS 和访问策略的单管理员场景；它不提供多账号、角色、数据隔离或公共互联网加固。通过认证的客户端可以修改设置与凭据，并驱动 Agent 在容器内执行命令。
 
 ## Docker 运行
 
@@ -71,21 +71,32 @@ Compose 默认启用持久化绑定挂载、只读根文件系统、`no-new-priv
 
 ## 局域网访问
 
-所有示例默认只绑定 `127.0.0.1`。如需从局域网中的其他设备访问，必须同时开放监听地址并配置信任的 Host：
+所有示例默认只绑定 `127.0.0.1`。如需从局域网中的其他设备访问，必须同时开放监听地址、配置信任的 Host，并设置管理员密钥：
 
-- Docker Run：将端口映射改为 `-p 3080:3080`，并将 `DSH_CONTAINER_TRUSTED_HOSTS` 设置为浏览器实际使用的所有主机名或 IP。
-- Docker Compose：在 `.env` 中将 `DSH_CONTAINER_BIND_ADDRESS` 设为 `0.0.0.0`，并更新 `DSH_CONTAINER_TRUSTED_HOSTS`。
+- Docker Run：将端口映射改为 `-p 3080:3080`，将 `DSH_CONTAINER_TRUSTED_HOSTS` 设置为浏览器实际使用的所有主机名或 IP，并设置 `DSH_CONTAINER_KEY`。
+- Docker Compose：在 `.env` 中将 `DSH_CONTAINER_BIND_ADDRESS` 设为 `0.0.0.0`，更新 `DSH_CONTAINER_TRUSTED_HOSTS`，并设置 `DSH_CONTAINER_KEY`。
 
 示例：
 
 ```dotenv
 DSH_CONTAINER_BIND_ADDRESS=0.0.0.0
 DSH_CONTAINER_TRUSTED_HOSTS=192.168.1.100,dsh.local
+DSH_CONTAINER_KEY=replace-with-a-private-key
 ```
 
-多个 trusted hosts 使用逗号分隔，可以填写主机名、IP 或 `host:port`。不带端口的值匹配该主机的任意端口。trusted-host 只是可达性和同源边界，不是身份认证。
+多个 trusted hosts 使用逗号分隔，可以填写主机名、IP 或 `host:port`。不带端口的值匹配该主机的任意端口。trusted-host 只是同源与 DNS-rebinding 边界，既不是可达性控制，也不是身份认证：relay 与 DSH 都接受 loopback authority，非浏览器客户端可以用 `Host: localhost` 通过这项检查。真正的入口控制是 `DSH_CONTAINER_KEY`。
 
 条目必须是裸 authority（`host` 或 `host:port`）：不要带 `http://`、路径、尾斜杠、`user@` 或空白。DSH 0.2 起会在加载时校验并在不合法时直接拒绝启动，容器日志会显示 `trustedHosts entry ... is not a bare host[:port] authority`。
+
+### 公开地址公告
+
+容器内的 DSH 只监听 `127.0.0.1`，默认公告的地址是 `http://127.0.0.1:3081/`。这个地址在浏览器里不可达，也会让 Agent 运行时上下文拿到错误链接。设置 `DSH_CONTAINER_PUBLIC_URL` 后，entrypoint 会把它作为 `--public-url` 传给 DSH：
+
+```dotenv
+DSH_CONTAINER_PUBLIC_URL=https://dsh.example.com
+```
+
+该值用于 DSH 的启动 URL、`DSH_WEB_URL` 和 Agent 运行时上下文，但**不授予信任**：浏览器实际使用的 authority 仍必须写进 `DSH_CONTAINER_TRUSTED_HOSTS`。它只接受站点根地址（协议、主机、端口），不接受挂载前缀、凭据、查询或片段；容器目前不支持把 WebUI 挂在 `/ui/` 这类子路径下。
 
 ### DSH 浏览器会话
 
@@ -94,7 +105,7 @@ DSH 0.2 起自带浏览器会话认证：启动后打印一行带 `token` 的地
 - 令牌只在容器内交换，不写入页面或容器设置页；relay 也不会回显它。上游仍会按自身约定把带 token 的启动行写进容器日志，能读取容器日志的人本就等同容器管理员。relay 是唯一持有该会话的客户端，同一容器内的浏览器共享它。
 - 不要关闭 DSH 的启动行输出（Web profile 的 `printUrl`）：relay 启动时等待这一行，等不到就以非零状态退出，容器随之重启或被标记为不健康。
 - 若删除或重置 `.dsh/.credentials.yaml`，DSH 的会话签名密钥会改变；relay 收到 `401` 后自动清除缓存并在下一次请求重新换取。
-- DSH 侧没有按方法区分的 loopback 特权层：只要通过 relay 的入口检查（trusted-host 边界，以及启用时的管理员密钥），浏览器拿到的就是 owner 会话。
+- DSH 侧没有按方法区分的 loopback 特权层：只要通过 relay 的入口检查（启用时的管理员密钥；trusted-host 只做同源/DNS-rebinding 过滤），浏览器拿到的就是 owner 会话。
 
 ## 管理员密钥认证
 
@@ -104,7 +115,7 @@ DSH 0.2 起自带浏览器会话认证：启动后打印一行带 `token` 的地
 DSH_CONTAINER_KEY=replace-with-a-private-key
 ```
 
-未定义该变量时保持原有无认证行为。变量已定义但值为空、纯空白、包含控制字符或超过 4096 个 UTF-8 字节时，容器会按配置错误退出；其他值按原始字符串比较，不自动去除空格，也不设置最低强度。启用后，除登录和退出接口外的页面、静态资源、API 与 WebSocket 都需要认证。不可信 Host、跨站 Fetch Metadata 或不匹配的 Origin 会先返回 `403`，有效 Cookie 不会绕过这些检查。
+未定义该变量时保持原有无认证行为：任何能到达发布端口的客户端都会被 auth-relay 以 owner 身份接纳，因此局域网、反向代理或任何非本机访问场景应先设置该变量。变量已定义但值为空、纯空白、包含控制字符或超过 4096 个 UTF-8 字节时，容器会按配置错误退出；其他值按原始字符串比较，不自动去除空格，也不设置最低强度。启用后，除登录和退出接口外的页面、静态资源、API 与 WebSocket 都需要认证。不可信 Host、跨站 Fetch Metadata 或不匹配的 Origin 会先返回 `403`，有效 Cookie 不会绕过这些检查。
 
 登录页根据 `Accept-Language` 选择简体中文或英文，也可手动切换。成功登录会写入名为 `dsh_container_session` 的长期 `HttpOnly`、`Path=/`、`SameSite=Lax` Cookie；令牌由随机 nonce 和 HMAC-SHA256 组成，服务端不设置时间失效。浏览器仍可缩短保留时间或淘汰 Cookie。容器重启不会使 Cookie 失效，轮换 `DSH_CONTAINER_KEY` 会使旧 Cookie 立即失效。
 
@@ -144,12 +155,15 @@ server {
 
 `DSH_CONTAINER_TRUSTED_HOSTS` 必须包含浏览器实际使用的 `dsh.example.com`。如果代理未覆盖协议头，直接客户端可以伪造该头让浏览器收到不适用于 HTTP 的 `Secure` Cookie；如果代理未传递正确 Host/Origin，请求会按设计返回 `403`。
 
+容器只支持把 WebUI 挂在站点根路径。不要用反向代理把它挂到 `/ui/` 之类的前缀下：relay 的登录/退出路径、Cookie `Path` 和重定向都是根路径绝对地址，前缀会破坏登录流程。需要子路径部署时应先改造 relay。
+
 ## 配置
 
 | 变量 | 默认值 | 用途 |
 |---|---|---|
 | `DSH_CONTAINER_TRUSTED_HOSTS` | 必填 | DSH 接受的主机名、IP 或 `host:port`。 |
-| `DSH_CONTAINER_KEY` | 未设置 | 可选单管理员共享密钥；设置后启用全入口 Cookie 认证。 |
+| `DSH_CONTAINER_KEY` | 未设置 | 可选单管理员共享密钥；设置后启用全入口 Cookie 认证。局域网、反向代理或任何非本机访问场景应先设置。 |
+| `DSH_CONTAINER_PUBLIC_URL` | 未设置 | 浏览器访问的公开根地址，用于启动 URL、`DSH_WEB_URL` 和 Agent 运行时上下文；只接受站点根路径。 |
 | `DSH_CONTAINER_BIND_ADDRESS` | `127.0.0.1` | Compose 发布端口的宿主机监听地址。 |
 | `DSH_CONTAINER_PORT` | `3080` | Compose 发布到宿主机的端口。 |
 | `DSH_CONTAINER_RELAY_PORT` | `3080` | 容器内中继服务端口，通常无需修改。 |
@@ -178,7 +192,7 @@ WebUI 设置中提供只读的「DSH 容器」页面，显示 DSH 版本、端�
 - 推荐部署使用只读根文件系统、删除全部 Linux capabilities、启用 `no-new-privileges`，且不挂载 Docker socket。
 - 较旧内核可能不支持 DSH 所需的 Landlock 或非特权 Bubblewrap，因此镜像在容器内使用 `DSH_PERMISSION_MODE=danger-full-access`。
 - 共享管理员密钥不提供用户身份、角色授权或 Agent 隔离，并且对容器内 Agent 可见。
-- auth-relay 持有 DSH 自身的浏览器会话（owner 身份）；未启用管理员密钥时，能连到发布端口并携带受信 Host 的客户端即等同该身份。
+- auth-relay 持有 DSH 自身的浏览器会话（owner 身份）；未启用管理员密钥时，任何能连到发布端口的客户端都等同该身份（用 `Host: localhost` 即可通过 trusted-host 检查）。局域网、反向代理或任何非本机访问场景应先设置 `DSH_CONTAINER_KEY`。
 - 容器加固和共享密钥都不能替代 HTTPS 与网络访问控制。不要直接暴露到公共互联网；远程访问应放在外部 HTTPS 和访问策略之后。
 
 ## 镜像与更新
